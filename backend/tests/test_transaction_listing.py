@@ -1,0 +1,50 @@
+from datetime import date
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db.session import Base
+from app.models.models import Account, Platform, Transaction, TransactionType
+from app.services.finance import list_account_transactions, list_contributions
+
+
+def test_list_contributions_and_account_transactions_are_separated():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        platform = Platform(canonical_name="Wealthsimple")
+        db.add_all([account, platform])
+        db.flush()
+
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.contribution,
+                    transaction_date=date(2026, 1, 5),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    amount=1000,
+                    notes="Contribution",
+                ),
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 6),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    amount=800,
+                    notes="Bought ETF",
+                ),
+            ]
+        )
+        db.commit()
+
+        contributions = list_contributions(db, account="TFSA", year=2026)
+        activity = list_account_transactions(db, account="TFSA", year=2026)
+
+        assert len(contributions) == 1
+        assert contributions[0][0].transaction_type == TransactionType.contribution
+        assert len(activity) == 1
+        assert activity[0][0].transaction_type == TransactionType.investment_buy
