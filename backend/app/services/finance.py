@@ -71,6 +71,17 @@ def _reset_sequence(db: Session, model) -> None:
 
 
 def seed_reference_data(db: Session) -> None:
+    seed_counts = db.execute(
+        select(
+            select(func.count(Account.id)).scalar_subquery(),
+            select(func.count(Platform.id)).scalar_subquery(),
+            select(func.count(PlatformAlias.id)).scalar_subquery(),
+            select(func.count(Category.id)).scalar_subquery(),
+        )
+    ).one()
+    if tuple(seed_counts) >= (3, 5, 10, sum(len(options) for options in CATEGORY_OPTIONS.values())):
+        return
+
     for account_name in ["RRSP", "TFSA", "FHSA"]:
         if not db.scalar(select(Account).where(Account.name == account_name)):
             db.add(Account(name=account_name))

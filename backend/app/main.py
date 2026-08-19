@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.routes import router as api_router
 from app.db.session import SessionLocal
@@ -29,6 +29,11 @@ def startup():
         "FHSA": {2024: 8000, 2025: 8000, 2026: 8000},
         "TFSA": {2024: 7000, 2025: 7000, 2026: 7000},
     }
+    seeded_limit_count = db.scalar(select(func.count(ContributionLimit.id))) or 0
+    if seeded_limit_count >= sum(len(years) for years in seeded.values()):
+        db.close()
+        return
+
     for account_name, years in seeded.items():
         account = db.scalar(select(Account).where(Account.name == account_name))
         if not account:
