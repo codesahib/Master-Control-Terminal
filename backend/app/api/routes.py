@@ -118,24 +118,6 @@ def serialize_account_transaction_row(row) -> AccountTransactionRead:
     )
 
 
-def serialize_holding_row(row) -> HoldingRead:
-    snapshot, account_name, platform_name, symbol_name, broad_category, precise_category = row
-    return HoldingRead(
-        id=snapshot.id,
-        snapshot_date=snapshot.snapshot_date,
-        snapshot_year=snapshot.snapshot_year,
-        snapshot_type=snapshot.snapshot_type,
-        holding_date=snapshot.holding_date,
-        account_name=account_name,
-        platform_name=platform_name,
-        symbol=symbol_name,
-        broad_category=broad_category,
-        precise_category=precise_category,
-        record_type=snapshot.record_type,
-        market_value=float(snapshot.market_value),
-    )
-
-
 @router.post("/transactions", response_model=TransactionRead)
 def create_transaction_endpoint(payload: TransactionCreate, db: Session = Depends(get_db)):
     txn = create_transaction(db, payload)
@@ -232,11 +214,9 @@ def list_account_transactions_endpoint(
 def list_holdings_endpoint(
     account: str | None = Query(default=None),
     year: int | None = Query(default=None),
-    snapshot_type: str = Query(default="current", pattern="^(current|year_end)$"),
     db: Session = Depends(get_db),
 ):
-    rows = list_holdings(db, account=account, year=year, snapshot_type=snapshot_type)
-    return [serialize_holding_row(row) for row in rows]
+    return list_holdings(db, account=account, year=year)
 
 
 @router.get("/limits/{year}", response_model=list[ContributionRoomRead])

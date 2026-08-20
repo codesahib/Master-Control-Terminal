@@ -330,35 +330,124 @@ def list_account_transactions(db: Session, account=None, platform=None, symbol=N
     return db.execute(q).all()
 
 
-def list_holdings(db: Session, account=None, year=None, snapshot_type: str = "current"):
+def list_holdings(db: Session, account=None, year=None):
+    as_of_date = date.today() if year is None or year >= date.today().year else date(year, 12, 31)
     q = (
         select(
-            HoldingSnapshot,
-            Account.name.label("account_name"),
-            Platform.canonical_name.label("platform_name"),
-            Instrument.symbol.label("symbol"),
-            Category.broad.label("broad_category"),
-            Category.precise.label("precise_category"),
+            Transaction,
+            Account,
+            Platform,
+            Instrument,
+            Category,
         )
-        .outerjoin(Account, HoldingSnapshot.account_id == Account.id)
-        .outerjoin(Platform, HoldingSnapshot.platform_id == Platform.id)
-        .outerjoin(Instrument, HoldingSnapshot.instrument_id == Instrument.id)
-        .outerjoin(Category, HoldingSnapshot.category_id == Category.id)
-        .where(HoldingSnapshot.snapshot_type == snapshot_type)
-        .order_by(Account.name, HoldingSnapshot.record_type, Instrument.symbol)
+        .outerjoin(Account, Transaction.account_id == Account.id)
+        .outerjoin(Platform, Transaction.platform_id == Platform.id)
+        .outerjoin(Instrument, Transaction.instrument_id == Instrument.id)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(Transaction.transaction_date <= as_of_date)
+        .order_by(Transaction.transaction_date, Transaction.id)
     )
     if account:
         q = q.where(func.lower(Account.name) == account.lower())
-    if year:
-        q = q.where(HoldingSnapshot.snapshot_year == year)
 
-    rows = db.execute(q).all()
-    if not year and not rows:
-        latest_snapshot = db.scalar(select(func.max(HoldingSnapshot.snapshot_date)))
-        if latest_snapshot:
-            q = q.where(HoldingSnapshot.snapshot_date == latest_snapshot)
-            rows = db.execute(q).all()
-    return rows
+    cash = {}
+    positions = {}
+    for txn, account_row, platform, instrument, category in db.execute(q):
+        if not account_row:
+            continue
+
+        cash_key = (account_row.id, platform.id if platform else None)
+        cash.setdefault(
+            cash_key,
+            {
+                "account_name": account_row.name,
+                "platform_name": platform.canonical_name if platform else None,
+                "book_value": 0.0,
+            },
+        )
+
+        if txn.transaction_type == TransactionType.contribution:
+            cash[cash_key]["book_value"] += float(txn.amount)
+            continue
+        if txn.transaction_type == TransactionType.dividend_interest:
+            cash[cash_key]["book_value"] += float(txn.amount) - float(txn.fees or 0)
+            continue
+        if txn.transaction_type not in {TransactionType.investment_buy, TransactionType.investment_sell}:
+            continue
+
+        amount = float(txn.amount)
+        fees = float(txn.fees or 0)
+        if txn.transaction_type == TransactionType.investment_buy:
+            cash[cash_key]["book_value"] -= amount + fees
+        else:
+            cash[cash_key]["book_value"] += amount - fees
+
+        position_key = (account_row.id, platform.id if platform else None, instrument.id if instrument else None)
+        position = positions.setdefault(
+            position_key,
+            {
+                "account_name": account_row.name,
+                "platform_name": platform.canonical_name if platform else None,
+                "symbol": instrument.symbol if instrument else "Unspecified",
+                "broad_category": None,
+                "precise_category": None,
+                "quantity": 0.0,
+                "book_value": 0.0,
+                "has_quantity": False,
+            },
+        )
+        if category:
+            position["broad_category"] = category.broad
+            position["precise_category"] = category.precise
+
+        if txn.transaction_type == TransactionType.investment_buy:
+            position["book_value"] += amount + fees
+            if txn.quantity is not None:
+                position["quantity"] += txn.quantity
+                position["has_quantity"] = True
+            continue
+
+        if txn.quantity is not None and position["quantity"]:
+            position["book_value"] -= position["book_value"] * (txn.quantity / position["quantity"])
+            position["quantity"] -= txn.quantity
+            position["has_quantity"] = True
+        else:
+            position["book_value"] -= amount
+
+    holdings = []
+    for (account_id, platform_id), row in cash.items():
+        if row["book_value"]:
+            holdings.append(
+                {
+                    "id": f"cash:{account_id}:{platform_id or 0}",
+                    "as_of_date": as_of_date,
+                    "account_name": row["account_name"],
+                    "platform_name": row["platform_name"],
+                    "symbol": "Cash",
+                    "broad_category": "Cash",
+                    "precise_category": "Cash",
+                    "record_type": "cash",
+                    "quantity": None,
+                    "book_value": row["book_value"],
+                }
+            )
+    for (account_id, platform_id, instrument_id), row in positions.items():
+        if row["quantity"] or row["book_value"]:
+            holdings.append(
+                {
+                    "id": f"holding:{account_id}:{platform_id or 0}:{instrument_id or 0}",
+                    "as_of_date": as_of_date,
+                    "account_name": row["account_name"],
+                    "platform_name": row["platform_name"],
+                    "symbol": row["symbol"],
+                    "broad_category": row["broad_category"],
+                    "precise_category": row["precise_category"],
+                    "record_type": "holding",
+                    "quantity": row["quantity"] if row["has_quantity"] else None,
+                    "book_value": row["book_value"],
+                }
+            )
+    return sorted(holdings, key=lambda row: (row["account_name"], row["record_type"], row["symbol"]))
 
 
 def get_contribution_room(db: Session, tax_year: int):
@@ -457,41 +546,17 @@ def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new
 
 
 def distribution(db: Session, group_by: str, year: int | None = None, category_level: str = "precise"):
-    filters = []
-    if year:
-        filters.append(func.extract("year", HoldingSnapshot.snapshot_date) == year)
-
-    def build_query(active_filters):
+    totals = {}
+    for holding in list_holdings(db, year=year):
         if group_by == "sector":
-            category_column = Category.broad if category_level == "broad" else Category.precise
-            q = (
-                select(func.coalesce(category_column, "Uncategorized"), func.coalesce(func.sum(HoldingSnapshot.market_value), 0))
-                .outerjoin(Category, HoldingSnapshot.category_id == Category.id)
-                .group_by(category_column)
-            )
+            label = holding["broad_category"] if category_level == "broad" else holding["precise_category"]
         elif group_by == "account":
-            q = (
-                select(Account.name, func.coalesce(func.sum(HoldingSnapshot.market_value), 0))
-                .join(Account, HoldingSnapshot.account_id == Account.id)
-                .group_by(Account.name)
-            )
+            label = holding["account_name"]
         else:
-            q = (
-                select(func.coalesce(Platform.canonical_name, "Unknown"), func.coalesce(func.sum(HoldingSnapshot.market_value), 0))
-                .outerjoin(Platform, HoldingSnapshot.platform_id == Platform.id)
-                .group_by(Platform.canonical_name)
-            )
-        for condition in active_filters:
-            q = q.where(condition)
-        return q
-
-    rows = db.execute(build_query(filters)).all()
-    if year and not any(float(r[1] or 0) > 0 for r in rows):
-        latest_snapshot = db.scalar(select(func.max(HoldingSnapshot.snapshot_date)))
-        fallback_filters = [HoldingSnapshot.snapshot_date == latest_snapshot] if latest_snapshot else []
-        rows = db.execute(build_query(fallback_filters)).all()
-
-    return [{"label": (r[0] or "Unknown"), "value": float(r[1] or 0)} for r in rows]
+            label = holding["platform_name"]
+        label = label or "Uncategorized"
+        totals[label] = totals.get(label, 0.0) + holding["book_value"]
+    return [{"label": label, "value": value} for label, value in sorted(totals.items())]
 
 
 def timeseries(db: Session, year: int | None = None):

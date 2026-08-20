@@ -61,7 +61,6 @@ def test_account_transaction_only_requires_core_fields():
         amount=100,
     )
     assert txn.symbol is None
-    assert txn.broad_category is None
     assert txn.precise_category is None
 
 

@@ -28,18 +28,16 @@ export interface AccountTransaction extends ActivityRecord {
 }
 
 export interface Holding {
-  id: number;
-  snapshot_date: string;
-  snapshot_year?: number;
-  snapshot_type: "current" | "year_end" | string;
-  holding_date?: string;
-  account_name?: string;
+  id: string;
+  as_of_date: string;
+  account_name: string;
   platform_name?: string;
-  symbol?: string;
+  symbol: string;
   broad_category?: string;
   precise_category?: string;
   record_type: "holding" | "cash" | "unused" | string;
-  market_value: number;
+  quantity?: number;
+  book_value: number;
 }
 
 export type Transaction = Omit<AccountTransaction, "transaction_type"> & {

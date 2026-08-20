@@ -384,7 +384,7 @@ function App() {
             showAccount={false}
           />
           <div className="panel table-wrap">
-            <h3>{selectedAccount} Holdings Distribution ({yearLabel(accountYear)})</h3>
+            <h3>{selectedAccount} Derived Holdings ({yearLabel(accountYear)})</h3>
             <table>
               <thead>
                 <tr>
@@ -392,27 +392,25 @@ function App() {
                   <th>Symbol</th>
                   <th>Broad Category</th>
                   <th>Precise Category</th>
-                  <th>Market Value</th>
-                  <th>Snapshot Date</th>
-                  <th>Holding Date</th>
+                  <th>Quantity</th>
+                  <th>Book Value</th>
+                  <th>As Of</th>
                 </tr>
               </thead>
               <tbody>
                 {accountHoldings.map((holding) => (
                   <tr key={holding.id}>
                     <td>{holding.record_type}</td>
-                    <td>{holding.symbol || "-"}</td>
+                    <td>{holding.symbol}</td>
                     <td>{holding.broad_category || "-"}</td>
                     <td>{holding.precise_category || "-"}</td>
-                    <td>${holding.market_value.toFixed(2)}</td>
-                    <td>{holding.snapshot_date}</td>
-                    <td>{holding.holding_date || "-"}</td>
+                    <td>{holding.quantity ?? "-"}</td>
+                    <td>${holding.book_value.toFixed(2)}</td>
+                    <td>{holding.as_of_date}</td>
                   </tr>
                 ))}
                 {accountHoldings.length === 0 && (
-                  <tr>
-                    <td colSpan={7}>No holdings snapshot rows found for this account/year.</td>
-                  </tr>
+                  <tr><td colSpan={7}>No transactions recorded for this account/year.</td></tr>
                 )}
               </tbody>
             </table>

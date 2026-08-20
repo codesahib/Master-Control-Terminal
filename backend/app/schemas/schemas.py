@@ -29,6 +29,10 @@ class TransactionCreate(BaseModel):
             TransactionType.dividend_interest,
         } and not self.symbol:
             raise ValueError("symbol is required for investment and dividend transactions")
+        if self.transaction_type in {TransactionType.investment_buy, TransactionType.investment_sell} and (
+            self.quantity is None or self.quantity <= 0
+        ):
+            raise ValueError("quantity is required for investment buys and sells")
         if self.transaction_type == TransactionType.transfer and not self.notes:
             raise ValueError("notes are required for transfer transactions")
         return self
@@ -104,18 +108,16 @@ class AccountTransactionRead(BaseModel):
 
 
 class HoldingRead(BaseModel):
-    id: int
-    snapshot_date: date
-    snapshot_year: Optional[int]
-    snapshot_type: str
-    holding_date: Optional[date]
-    account_name: Optional[str]
+    id: str
+    as_of_date: date
+    account_name: str
     platform_name: Optional[str]
-    symbol: Optional[str]
+    symbol: str
     broad_category: Optional[str]
     precise_category: Optional[str]
     record_type: str
-    market_value: float
+    quantity: Optional[float]
+    book_value: float
 
 
 class ContributionRoomRead(BaseModel):
