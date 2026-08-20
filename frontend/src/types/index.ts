@@ -25,6 +25,15 @@ export interface AccountTransaction extends ActivityRecord {
   precise_category?: string;
   quantity?: number;
   fees?: number;
+  contribution_id?: number;
+}
+
+export interface ContributionFunding {
+  id: number;
+  transaction_date: string;
+  platform_name?: string;
+  amount: number;
+  remaining_amount: number;
 }
 
 export interface Holding {

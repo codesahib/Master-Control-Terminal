@@ -52,13 +52,23 @@ def test_account_transaction_rejects_contribution_type():
         )
 
 
-def test_account_transaction_only_requires_core_fields():
+def test_account_investment_requires_contribution():
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.investment_buy,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Wealthsimple",
+            amount=100,
+        )
+
     txn = AccountTransactionCreate(
         transaction_type=TransactionType.investment_buy,
         transaction_date="2026-01-01",
         account_name="TFSA",
         platform_name="Wealthsimple",
         amount=100,
+        contribution_id=1,
     )
     assert txn.symbol is None
     assert txn.precise_category is None

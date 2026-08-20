@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import { AccountTransaction, AccountTransactionType } from "../types";
+import { AccountTransaction, AccountTransactionType, ContributionFunding } from "../types";
 import {
   accountTransactionOptions,
   categoryOptions,
@@ -38,18 +38,37 @@ export function AccountTransactionModal({
     quantity: transaction?.quantity ? String(transaction.quantity) : "",
     fees: String(transaction?.fees ?? 0),
     notes: transaction?.notes || "",
+    contribution_id: transaction?.contribution_id ? String(transaction.contribution_id) : "",
   });
   const [error, setError] = useState("");
+  const [contributions, setContributions] = useState<ContributionFunding[]>([]);
 
   const requiresSymbol = useMemo(
     () => ["investment_buy", "investment_sell", "dividend_interest"].includes(transactionType),
     [transactionType]
   );
+  const requiresContribution = transactionType === "investment_buy";
+
+  useEffect(() => {
+    if (!requiresContribution) {
+      setContributions([]);
+      return;
+    }
+    api
+      .get<ContributionFunding[]>("/available-contributions", {
+        params: { account: form.account_name, include_contribution_id: transaction?.contribution_id },
+      })
+      .then((response) => setContributions(response.data));
+  }, [form.account_name, requiresContribution, transaction?.contribution_id]);
 
   async function submit() {
     setError("");
     if (!form.transaction_date || !form.account_name || !form.platform_name || form.amount === "") {
       setError("Amount, date, account, and platform are required");
+      return;
+    }
+    if (requiresContribution && !form.contribution_id) {
+      setError("Select a contribution before recording an investment buy");
       return;
     }
 
@@ -67,6 +86,7 @@ export function AccountTransactionModal({
         quantity: requiresSymbol && form.quantity ? Number(form.quantity) : null,
         fees: Number(form.fees || 0),
         notes: form.notes || null,
+        contribution_id: requiresContribution ? Number(form.contribution_id) : null,
       };
 
       if (transaction) {
@@ -103,7 +123,7 @@ export function AccountTransactionModal({
         <div className="form-grid">
           <div className="field"><label>Date</label><input type="date" value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
           <div className="field"><label>Amount</label><input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
+          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value, contribution_id: "" })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
           <div className="field">
             <label>Platform</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
@@ -112,6 +132,7 @@ export function AccountTransactionModal({
               ))}
             </select>
           </div>
+          {requiresContribution && <div className="field"><label>Funding Contribution</label><select value={form.contribution_id} onChange={(e) => setForm({ ...form, contribution_id: e.target.value })}><option value="">Select a contribution</option>{contributions.map((contribution) => <option key={contribution.id} value={contribution.id}>{contribution.transaction_date} · {contribution.platform_name || "No platform"} · ${contribution.remaining_amount.toFixed(2)} remaining</option>)}</select></div>}
           <div className="field">
             <label>Broad Category</label>
             <select

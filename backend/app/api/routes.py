@@ -13,6 +13,7 @@ from app.schemas.schemas import (
     AccountTransactionCreate,
     AccountTransactionRead,
     ContributionCreate,
+    ContributionFundingRead,
     ContributionLimitRead,
     ContributionLimitUpdate,
     ContributionRead,
@@ -34,6 +35,7 @@ from app.services.finance import (
     export_all_data,
     get_contribution_room,
     list_account_transactions,
+    list_available_contributions,
     list_contributions,
     list_holdings,
     list_contribution_limits,
@@ -67,6 +69,7 @@ def serialize_transaction(txn, db: Session) -> TransactionRead:
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
         notes=txn.notes,
+        contribution_id=txn.contribution_id,
     )
 
 
@@ -85,6 +88,7 @@ def serialize_transaction_row(row) -> TransactionRead:
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
         notes=txn.notes,
+        contribution_id=txn.contribution_id,
     )
 
 
@@ -115,6 +119,7 @@ def serialize_account_transaction_row(row) -> AccountTransactionRead:
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
         notes=txn.notes,
+        contribution_id=txn.contribution_id,
     )
 
 
@@ -182,6 +187,15 @@ def list_contributions_endpoint(
 ):
     rows = list_contributions(db, account=account, platform=platform, year=year)
     return [serialize_contribution_row(row) for row in rows]
+
+
+@router.get("/available-contributions", response_model=list[ContributionFundingRead])
+def list_available_contributions_endpoint(
+    account: str,
+    include_contribution_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    return list_available_contributions(db, account, include_contribution_id)
 
 
 @router.post("/account-transactions", response_model=AccountTransactionRead)

@@ -206,6 +206,7 @@ def _save_transaction(
     quantity = getattr(payload, "quantity", None)
     fees = getattr(payload, "fees", 0)
     reversal_of_id = getattr(payload, "reversal_of_id", None)
+    contribution_id = getattr(payload, "contribution_id", None)
     resolved_type = transaction_type or getattr(payload, "transaction_type")
     instrument = get_or_create_instrument(db, symbol, instrument_name)
     category = get_or_create_category(db, broad_category, precise_category)
@@ -225,6 +226,7 @@ def _save_transaction(
     txn.fees = fees
     txn.notes = payload.notes
     txn.reversal_of_id = reversal_of_id
+    txn.contribution_id = contribution_id
     db.commit()
     db.refresh(txn)
     return txn
@@ -253,6 +255,7 @@ def update_contribution(db: Session, transaction_id: int, payload: ContributionC
 
 
 def create_account_transaction(db: Session, payload: AccountTransactionCreate) -> Transaction:
+    _validate_contribution_funding(db, payload)
     return _save_transaction(db, payload)
 
 
@@ -260,7 +263,68 @@ def update_account_transaction(db: Session, transaction_id: int, payload: Accoun
     txn = db.get(Transaction, transaction_id)
     if not txn or txn.transaction_type == TransactionType.contribution:
         return None
+    _validate_contribution_funding(db, payload, txn)
     return _save_transaction(db, payload, txn=txn)
+
+
+def _validate_contribution_funding(
+    db: Session, payload: AccountTransactionCreate, transaction: Transaction | None = None
+) -> None:
+    if payload.transaction_type != TransactionType.investment_buy:
+        return
+
+    contribution = db.get(Transaction, payload.contribution_id)
+    if not contribution or contribution.transaction_type != TransactionType.contribution:
+        raise ValueError("selected contribution was not found")
+
+    contribution_account = db.get(Account, contribution.account_id) if contribution.account_id else None
+    if not contribution_account or contribution_account.name.lower() != payload.account_name.lower():
+        raise ValueError("selected contribution belongs to a different account")
+
+    usage = select(func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0)).where(
+        Transaction.contribution_id == contribution.id,
+        Transaction.transaction_type == TransactionType.investment_buy,
+    )
+    if transaction:
+        usage = usage.where(Transaction.id != transaction.id)
+    remaining = float(contribution.amount) - float(db.scalar(usage) or 0)
+    if payload.amount + (payload.fees or 0) > remaining:
+        raise ValueError(f"selected contribution has only ${remaining:.2f} remaining")
+
+
+def list_available_contributions(db: Session, account: str, include_contribution_id: int | None = None):
+    contributions = db.execute(
+        select(Transaction, Platform.canonical_name)
+        .join(Account, Transaction.account_id == Account.id)
+        .outerjoin(Platform, Transaction.platform_id == Platform.id)
+        .where(Transaction.transaction_type == TransactionType.contribution, func.lower(Account.name) == account.lower())
+        .order_by(Transaction.transaction_date, Transaction.id)
+    ).all()
+    usage = dict(
+        db.execute(
+            select(
+                Transaction.contribution_id,
+                func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0),
+            )
+            .where(
+                Transaction.contribution_id.is_not(None),
+                Transaction.transaction_type == TransactionType.investment_buy,
+            )
+            .group_by(Transaction.contribution_id)
+        ).all()
+    )
+    return [
+        {
+            "id": contribution.id,
+            "transaction_date": contribution.transaction_date,
+            "platform_name": platform_name,
+            "amount": float(contribution.amount),
+            "remaining_amount": float(contribution.amount) - float(usage.get(contribution.id, 0)),
+        }
+        for contribution, platform_name in contributions
+        if float(contribution.amount) - float(usage.get(contribution.id, 0)) > 0
+        or contribution.id == include_contribution_id
+    ]
 
 
 def list_transactions(db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None):
@@ -638,6 +702,7 @@ def export_all_data(db: Session):
                 "fees": row.fees,
                 "notes": row.notes,
                 "reversal_of_id": row.reversal_of_id,
+                "contribution_id": row.contribution_id,
                 "created_at": row.created_at,
             }
             for row in _rows_for_export(db, Transaction)
@@ -750,15 +815,18 @@ def restore_all_data(db: Session, payload: dict):
                 fees=row.get("fees"),
                 notes=row.get("notes"),
                 reversal_of_id=None,
+                contribution_id=None,
                 created_at=_parse_datetime(row.get("created_at")),
             )
         )
     db.flush()
     for row in transaction_rows:
-        if row.get("reversal_of_id") is not None:
-            txn = db.get(Transaction, row["id"])
-            if txn:
+        txn = db.get(Transaction, row["id"])
+        if txn:
+            if row.get("reversal_of_id") is not None:
                 txn.reversal_of_id = row["reversal_of_id"]
+            if row.get("contribution_id") is not None:
+                txn.contribution_id = row.get("contribution_id")
 
     for row in data.get("holding_snapshots", []):
         db.add(

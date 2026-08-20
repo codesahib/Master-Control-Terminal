@@ -60,11 +60,14 @@ class AccountTransactionCreate(BaseModel):
     fees: Optional[float] = Field(default=0, ge=0)
     notes: Optional[str] = None
     reversal_of_id: Optional[int] = None
+    contribution_id: Optional[int] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_account_transaction(self):
         if self.transaction_type == TransactionType.contribution:
             raise ValueError("use the contribution endpoints for contribution records")
+        if self.transaction_type == TransactionType.investment_buy and not self.contribution_id:
+            raise ValueError("select a contribution before recording an investment buy")
         return self
 
 
@@ -81,6 +84,7 @@ class TransactionRead(BaseModel):
     quantity: Optional[float]
     fees: Optional[float]
     notes: Optional[str]
+    contribution_id: Optional[int] = None
 
 
 class ContributionRead(BaseModel):
@@ -105,6 +109,15 @@ class AccountTransactionRead(BaseModel):
     quantity: Optional[float]
     fees: Optional[float]
     notes: Optional[str]
+    contribution_id: Optional[int] = None
+
+
+class ContributionFundingRead(BaseModel):
+    id: int
+    transaction_date: date
+    platform_name: Optional[str]
+    amount: float
+    remaining_amount: float
 
 
 class HoldingRead(BaseModel):
