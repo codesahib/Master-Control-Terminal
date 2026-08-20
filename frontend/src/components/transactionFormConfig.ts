@@ -28,8 +28,6 @@ export const categoryOptions: Record<string, string[]> = {
   Other: ["Other"],
 };
 
-export const defaultBroadCategory = "Cash";
-
 export function preciseOptionsFor(broadCategory: string) {
-  return categoryOptions[broadCategory] || categoryOptions[defaultBroadCategory];
+  return categoryOptions[broadCategory] || [];
 }

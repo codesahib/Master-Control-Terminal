@@ -45,8 +45,8 @@ class ContributionCreate(BaseModel):
 class AccountTransactionCreate(BaseModel):
     transaction_type: TransactionType
     transaction_date: date
-    account_name: Optional[str] = None
-    platform_name: Optional[str] = None
+    account_name: str = Field(min_length=1)
+    platform_name: str = Field(min_length=1)
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
     broad_category: Optional[str] = None
@@ -61,14 +61,6 @@ class AccountTransactionCreate(BaseModel):
     def validate_account_transaction(self):
         if self.transaction_type == TransactionType.contribution:
             raise ValueError("use the contribution endpoints for contribution records")
-        if self.transaction_type in {
-            TransactionType.investment_buy,
-            TransactionType.investment_sell,
-            TransactionType.dividend_interest,
-        } and not self.symbol:
-            raise ValueError("symbol is required for investment and dividend transactions")
-        if self.transaction_type == TransactionType.transfer and not self.notes:
-            raise ValueError("notes are required for transfer transactions")
         return self
 
 

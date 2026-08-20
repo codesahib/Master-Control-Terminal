@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Contribution } from "../types";
 import { platformOptions } from "./transactionFormConfig";
@@ -10,15 +10,23 @@ interface Props {
   contribution?: Contribution;
 }
 
-export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution }: Props) {
-  const [form, setForm] = useState({
-    transaction_date: contribution?.transaction_date || new Date().toISOString().slice(0, 10),
+function contributionForm(contribution: Contribution | undefined, defaultAccount: string) {
+  return {
+    transaction_date: contribution?.transaction_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
     account_name: contribution?.account_name || defaultAccount,
     platform_name: contribution?.platform_name || "Wealthsimple",
     amount: String(contribution?.amount ?? 0),
     notes: contribution?.notes || "",
-  });
+  };
+}
+
+export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution }: Props) {
+  const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount));
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setForm(contributionForm(contribution, defaultAccount));
+  }, [contribution, defaultAccount]);
 
   async function submit() {
     setError("");

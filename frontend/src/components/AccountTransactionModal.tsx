@@ -4,7 +4,6 @@ import { AccountTransaction, AccountTransactionType } from "../types";
 import {
   accountTransactionOptions,
   categoryOptions,
-  defaultBroadCategory,
   platformOptions,
   preciseOptionsFor,
 } from "./transactionFormConfig";
@@ -31,8 +30,8 @@ export function AccountTransactionModal({
     transaction_date: transaction?.transaction_date || new Date().toISOString().slice(0, 10),
     account_name: transaction?.account_name || defaultAccount,
     platform_name: transaction?.platform_name || "Wealthsimple",
-    broad_category: transaction?.broad_category || defaultBroadCategory,
-    precise_category: transaction?.precise_category || categoryOptions[defaultBroadCategory][0],
+    broad_category: transaction?.broad_category || "",
+    precise_category: transaction?.precise_category || "",
     symbol: transaction?.symbol || "",
     instrument_name: "",
     amount: String(transaction?.amount ?? 0),
@@ -49,6 +48,11 @@ export function AccountTransactionModal({
 
   async function submit() {
     setError("");
+    if (!form.transaction_date || !form.account_name || !form.platform_name || form.amount === "") {
+      setError("Amount, date, account, and platform are required");
+      return;
+    }
+
     try {
       const payload = {
         transaction_type: transactionType,
@@ -117,10 +121,11 @@ export function AccountTransactionModal({
                 setForm({
                   ...form,
                   broad_category: broadCategory,
-                  precise_category: preciseOptionsFor(broadCategory)[0],
+                  precise_category: preciseOptionsFor(broadCategory)[0] || "",
                 });
               }}
             >
+              <option value="">None</option>
               {Object.keys(categoryOptions).map((category) => (
                 <option key={category} value={category}>{category}</option>
               ))}
@@ -129,6 +134,7 @@ export function AccountTransactionModal({
           <div className="field">
             <label>Precise Category</label>
             <select value={form.precise_category} onChange={(e) => setForm({ ...form, precise_category: e.target.value })}>
+              <option value="">None</option>
               {preciseOptionsFor(form.broad_category).map((category) => (
                 <option key={category} value={category}>{category}</option>
               ))}
