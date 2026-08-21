@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -9,10 +10,11 @@ from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
 from app.db.session import get_db
-from app.models.models import Account, Category, ImportType, Instrument, Platform
+from app.models.models import Account, Category, ImportType, Instrument, Platform, TransactionType
 from app.schemas.schemas import (
     AccountTransactionCreate,
     AccountTransactionRead,
+    PaginatedAccountTransactionRead,
     ContributionCreate,
     ContributionFundingRead,
     ContributionLimitRead,
@@ -23,6 +25,7 @@ from app.schemas.schemas import (
     HoldingRead,
     ImportPreviewResponse,
     ImportPreviewRow,
+    PaginatedTransactionRead,
     TimeSeriesPoint,
     TransactionCreate,
     TransactionRead,
@@ -146,17 +149,21 @@ def update_transaction_endpoint(transaction_id: int, payload: TransactionCreate,
     return serialize_transaction(txn, db)
 
 
-@router.get("/transactions", response_model=list[TransactionRead])
+@router.get("/transactions", response_model=PaginatedTransactionRead)
 def list_transactions_endpoint(
-    transaction_type: str | None = Query(default=None),
+    transaction_type: TransactionType | None = Query(default=None),
     account: str | None = Query(default=None),
     platform: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     year: int | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
-    rows = list_transactions(db, transaction_type, account, platform, symbol, year)
-    return [serialize_transaction_row(row, db) for row in rows]
+    rows, total = list_transactions(db, transaction_type, account, platform, symbol, year, page, sort_direction)
+    return PaginatedTransactionRead(
+        items=[serialize_transaction_row(row, db) for row in rows], total=total, page=page, page_size=10
+    )
 
 
 @router.post("/contributions", response_model=ContributionRead)
@@ -229,16 +236,24 @@ def update_account_transaction_endpoint(transaction_id: int, payload: AccountTra
     return serialize_transaction(txn, db)
 
 
-@router.get("/account-transactions", response_model=list[AccountTransactionRead])
+@router.get("/account-transactions", response_model=PaginatedAccountTransactionRead)
 def list_account_transactions_endpoint(
     account: str | None = Query(default=None),
     platform: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     year: int | None = Query(default=None),
+    transaction_type: TransactionType | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
-    rows = list_account_transactions(db, account=account, platform=platform, symbol=symbol, year=year)
-    return [serialize_account_transaction_row(row, db) for row in rows]
+    rows, total = list_account_transactions(
+        db, account=account, platform=platform, symbol=symbol, year=year,
+        transaction_type=transaction_type, page=page, sort_direction=sort_direction,
+    )
+    return PaginatedAccountTransactionRead(
+        items=[serialize_account_transaction_row(row, db) for row in rows], total=total, page=page, page_size=10
+    )
 
 
 @router.get("/holdings", response_model=list[HoldingRead])

@@ -120,6 +120,34 @@ textarea {
   grid-column: span 12;
 }
 
+.table-header,
+.table-controls,
+.pagination,
+.pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.table-header,
+.pagination {
+  justify-content: space-between;
+}
+
+.table-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-controls input {
+  width: 120px;
+}
+
+.pagination {
+  margin-top: 12px;
+}
+
 .btn {
   border: 0;
   border-radius: 10px;

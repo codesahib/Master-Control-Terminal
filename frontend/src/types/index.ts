@@ -66,6 +66,20 @@ export type Transaction = Omit<AccountTransaction, "transaction_type"> & {
   transaction_type: TransactionType;
 };
 
+export interface PaginatedTransactions {
+  items: Transaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PaginatedAccountTransactions {
+  items: AccountTransaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface DistributionPoint {
   label: string;
   value: number;

@@ -478,7 +478,9 @@ def list_transaction_fundings(db: Session, transaction: Transaction):
     return []
 
 
-def list_transactions(db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None):
+def list_transactions(
+    db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None, page=1, sort_direction="desc"
+):
     q = (
         select(
             Transaction,
@@ -492,7 +494,6 @@ def list_transactions(db: Session, transaction_type=None, account=None, platform
         .outerjoin(Platform, Transaction.platform_id == Platform.id)
         .outerjoin(Instrument, Transaction.instrument_id == Instrument.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
-        .order_by(Transaction.transaction_date.desc(), Transaction.id.desc())
     )
     if transaction_type:
         q = q.where(Transaction.transaction_type == transaction_type)
@@ -504,7 +505,10 @@ def list_transactions(db: Session, transaction_type=None, account=None, platform
         q = q.where(func.lower(Instrument.symbol) == symbol.lower())
     if year:
         q = q.where(func.extract("year", Transaction.transaction_date) == year)
-    return db.execute(q).all()
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    order = Transaction.transaction_date.asc() if sort_direction == "asc" else Transaction.transaction_date.desc()
+    id_order = Transaction.id.asc() if sort_direction == "asc" else Transaction.id.desc()
+    return db.execute(q.order_by(order, id_order).offset((page - 1) * 10).limit(10)).all(), total
 
 
 def _rrsp_contribution_deadline(tax_year: int):
@@ -565,7 +569,9 @@ def list_contributions(db: Session, account=None, platform=None, year=None):
     return db.execute(q).all()
 
 
-def list_account_transactions(db: Session, account=None, platform=None, symbol=None, year=None):
+def list_account_transactions(
+    db: Session, account=None, platform=None, symbol=None, year=None, transaction_type=None, page=1, sort_direction="desc"
+):
     q = (
         select(
             Transaction,
@@ -580,7 +586,6 @@ def list_account_transactions(db: Session, account=None, platform=None, symbol=N
         .outerjoin(Instrument, Transaction.instrument_id == Instrument.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(Transaction.transaction_type != TransactionType.contribution)
-        .order_by(Transaction.transaction_date.desc(), Transaction.id.desc())
     )
     if account:
         q = q.where(func.lower(Account.name) == account.lower())
@@ -590,7 +595,12 @@ def list_account_transactions(db: Session, account=None, platform=None, symbol=N
         q = q.where(func.lower(Instrument.symbol) == symbol.lower())
     if year:
         q = q.where(_rrsp_tax_year_filter(year))
-    return db.execute(q).all()
+    if transaction_type:
+        q = q.where(Transaction.transaction_type == transaction_type)
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    order = Transaction.transaction_date.asc() if sort_direction == "asc" else Transaction.transaction_date.desc()
+    id_order = Transaction.id.asc() if sort_direction == "asc" else Transaction.id.desc()
+    return db.execute(q.order_by(order, id_order).offset((page - 1) * 10).limit(10)).all(), total
 
 
 def list_holdings(db: Session, account=None, year=None):

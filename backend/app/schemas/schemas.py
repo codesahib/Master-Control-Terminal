@@ -117,6 +117,13 @@ class TransactionRead(BaseModel):
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
 
+class PaginatedTransactionRead(BaseModel):
+    items: list[TransactionRead]
+    total: int
+    page: int
+    page_size: int
+
+
 class ContributionRead(BaseModel):
     id: int
     transaction_date: date
@@ -142,6 +149,13 @@ class AccountTransactionRead(BaseModel):
     notes: Optional[str]
     contribution_id: Optional[int] = None
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
+
+
+class PaginatedAccountTransactionRead(BaseModel):
+    items: list[AccountTransactionRead]
+    total: int
+    page: int
+    page_size: int
 
 
 class ContributionFundingRead(BaseModel):
