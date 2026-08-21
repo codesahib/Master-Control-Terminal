@@ -14,6 +14,7 @@ class TransactionType(str, enum.Enum):
     transfer = "transfer"
     dividend_interest = "dividend_interest"
     dividend_reinvestment = "dividend_reinvestment"
+    quantity_adjustment = "quantity_adjustment"
 
 
 class ImportType(str, enum.Enum):

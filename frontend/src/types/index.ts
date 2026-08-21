@@ -4,7 +4,8 @@ export type TransactionType =
   | "investment_sell"
   | "transfer"
   | "dividend_interest"
-  | "dividend_reinvestment";
+  | "dividend_reinvestment"
+  | "quantity_adjustment";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 

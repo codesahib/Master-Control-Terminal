@@ -666,6 +666,7 @@ def list_holdings(db: Session, account=None, year=None):
             TransactionType.investment_buy,
             TransactionType.investment_sell,
             TransactionType.dividend_reinvestment,
+            TransactionType.quantity_adjustment,
         }:
             continue
 
@@ -698,6 +699,12 @@ def list_holdings(db: Session, account=None, year=None):
 
         if txn.transaction_type in {TransactionType.investment_buy, TransactionType.dividend_reinvestment}:
             position["book_value"] += amount + fees
+            if txn.quantity is not None:
+                position["quantity"] += txn.quantity
+                position["has_quantity"] = True
+            continue
+
+        if txn.transaction_type == TransactionType.quantity_adjustment:
             if txn.quantity is not None:
                 position["quantity"] += txn.quantity
                 position["has_quantity"] = True

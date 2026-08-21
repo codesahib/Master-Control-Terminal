@@ -27,6 +27,7 @@ class TransactionCreate(BaseModel):
             TransactionType.investment_buy,
             TransactionType.investment_sell,
             TransactionType.dividend_reinvestment,
+            TransactionType.quantity_adjustment,
         } and not self.symbol:
             raise ValueError("symbol is required for investment and dividend transactions")
         if self.transaction_type in {
@@ -37,6 +38,10 @@ class TransactionCreate(BaseModel):
             self.quantity is None or self.quantity <= 0
         ):
             raise ValueError("quantity is required for investment buys and sells")
+        if self.transaction_type == TransactionType.quantity_adjustment and (
+            self.quantity is None or self.quantity == 0 or self.amount != 0 or self.fees
+        ):
+            raise ValueError("quantity adjustments require a non-zero quantity and zero amount and fees")
         if self.transaction_type == TransactionType.transfer and not self.notes:
             raise ValueError("notes are required for transfer transactions")
         return self
@@ -96,6 +101,17 @@ class AccountTransactionCreate(BaseModel):
             not self.symbol or self.quantity is None or self.quantity <= 0 or self.amount <= 0
         ):
             raise ValueError("dividend reinvestments require a symbol, positive quantity, and positive amount")
+        if self.transaction_type == TransactionType.quantity_adjustment and (
+            not self.symbol
+            or self.quantity is None
+            or self.quantity == 0
+            or self.amount != 0
+            or self.fees
+            or self.contribution_id
+            or self.funding_contributions
+            or self.funding_cash_sources
+        ):
+            raise ValueError("quantity adjustments require a symbol, non-zero quantity, and no cash or funding")
         return self
 
 

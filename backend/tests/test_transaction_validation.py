@@ -22,6 +22,26 @@ def test_dividend_reinvestment_requires_symbol_and_quantity():
         )
 
 
+def test_quantity_adjustment_requires_non_zero_quantity_and_zero_cash():
+    txn = TransactionCreate(
+        transaction_type=TransactionType.quantity_adjustment,
+        transaction_date="2026-01-01",
+        symbol="NVDA",
+        amount=0,
+        quantity=-1,
+    )
+    assert txn.quantity == -1
+
+    with pytest.raises(ValueError):
+        TransactionCreate(
+            transaction_type=TransactionType.quantity_adjustment,
+            transaction_date="2026-01-01",
+            symbol="NVDA",
+            amount=1,
+            quantity=1,
+        )
+
+
 def test_transfer_requires_notes():
     with pytest.raises(ValueError):
         TransactionCreate(

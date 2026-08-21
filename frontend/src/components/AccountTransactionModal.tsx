@@ -58,7 +58,7 @@ export function AccountTransactionModal({
   });
 
   const requiresSymbol = useMemo(
-    () => ["investment_buy", "investment_sell", "dividend_reinvestment"].includes(transactionType),
+    () => ["investment_buy", "investment_sell", "dividend_reinvestment", "quantity_adjustment"].includes(transactionType),
     [transactionType]
   );
   const requiresFunding = ["investment_buy", "transfer"].includes(transactionType);
