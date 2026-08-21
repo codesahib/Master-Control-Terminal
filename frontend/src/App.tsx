@@ -1,6 +1,6 @@
-import { ChangeEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import ReactECharts from "echarts-for-react";
-import { api } from "./api/client";
+import { api, isApiLoading, subscribeToApiLoading } from "./api/client";
 import { AccountTransactionModal } from "./components/AccountTransactionModal";
 import { ContributionModal } from "./components/ContributionModal";
 import { DistributionChart } from "./components/DistributionChart";
@@ -22,6 +22,7 @@ function yearLabel(year: YearFilter) {
 }
 
 function App() {
+  const isLoading = useSyncExternalStore(subscribeToApiLoading, isApiLoading);
   const currentYear = new Date().getFullYear();
   const [view, setView] = useState<"dashboard" | "account" | "limits">("dashboard");
   const [globalYear, setGlobalYear] = useState<YearFilter>(currentYear);
@@ -269,10 +270,17 @@ function App() {
   };
 
   const selectedAccountLimit = accountLimits.find((limit) => limit.account === selectedAccount);
+  const loadingOverlay = isLoading && (
+    <div className="loading-overlay" role="status" aria-live="polite" aria-label="Loading">
+      <span className="spinner" aria-hidden="true" />
+      Loading…
+    </div>
+  );
 
   if (view === "limits") {
     return (
       <div className="app">
+        {loadingOverlay}
         <div className="header">
           <div>
             <button className="btn btn-secondary" onClick={() => setView("account")}>Back</button>
@@ -331,6 +339,7 @@ function App() {
   if (view === "account") {
     return (
       <div className="app">
+        {loadingOverlay}
         <div className="header">
           <div>
             <button className="btn btn-secondary" onClick={() => setView("dashboard")}>Back</button>
@@ -440,6 +449,7 @@ function App() {
 
   return (
     <div className="app">
+      {loadingOverlay}
       <div className="header">
         <div>
           <h1>Master Terminal</h1>
