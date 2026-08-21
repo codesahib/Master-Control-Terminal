@@ -1,9 +1,10 @@
 import json
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_, case, func, or_, select, text
+from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, case, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.db.session import Base
 from app.models.models import (
     Account,
     Category,
@@ -23,6 +24,7 @@ from app.models.models import (
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
 
 TRACKED_YEARS = ["2023", "2024", "2025", "2026"]
+LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
 CATEGORY_OPTIONS = {
     "Cash": ["Cash"],
     "Bond": ["Bond", "GIC", "Money Market"],
@@ -43,29 +45,38 @@ CATEGORY_OPTIONS = {
 }
 
 
-def _rows_for_export(db: Session, model):
-    return db.scalars(select(model).order_by(model.id)).all()
+def _backup_tables():
+    return Base.metadata.sorted_tables
 
 
-def _parse_date(value: str | None):
-    if value is None or isinstance(value, date):
-        return value
-    return date.fromisoformat(value)
+def _rows_for_export(db: Session, table):
+    statement = select(table)
+    if "id" in table.c:
+        statement = statement.order_by(table.c.id)
+    return [dict(row) for row in db.execute(statement).mappings()]
 
 
-def _parse_datetime(value: str | None):
-    if value is None or isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _restore_value(column, value):
+    if value is None:
+        return None
+    if isinstance(column.type, DateTime) and isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if isinstance(column.type, Date) and isinstance(value, str):
+        return date.fromisoformat(value)
+    if isinstance(column.type, SqlEnum) and isinstance(value, str):
+        return column.type.python_type(value)
+    return value
 
 
-def _reset_sequence(db: Session, model) -> None:
+def _reset_sequence(db: Session, table) -> None:
     if db.bind is None or db.bind.dialect.name != "postgresql":
         return
-    max_id = db.scalar(select(func.max(model.id))) or 0
+    if "id" not in table.c:
+        return
+    max_id = db.scalar(select(func.max(table.c.id))) or 0
     db.execute(
         text(
-            f"SELECT setval(pg_get_serial_sequence('{model.__tablename__}', 'id'), :value, :is_called)"
+            f"SELECT setval(pg_get_serial_sequence('{table.name}', 'id'), :value, :is_called)"
         ),
         {"value": max_id or 1, "is_called": max_id > 0},
     )
@@ -801,237 +812,57 @@ def create_import_preview(db: Session, import_type: ImportType, source_filename:
 
 
 def export_all_data(db: Session):
-    return {
-        "accounts": [
-            {"id": row.id, "name": row.name}
-            for row in _rows_for_export(db, Account)
-        ],
-        "platforms": [
-            {"id": row.id, "canonical_name": row.canonical_name}
-            for row in _rows_for_export(db, Platform)
-        ],
-        "platform_aliases": [
-            {"id": row.id, "alias": row.alias, "platform_id": row.platform_id}
-            for row in _rows_for_export(db, PlatformAlias)
-        ],
-        "categories": [
-            {"id": row.id, "broad": row.broad, "precise": row.precise}
-            for row in _rows_for_export(db, Category)
-        ],
-        "instruments": [
-            {"id": row.id, "symbol": row.symbol, "name": row.name, "category_id": row.category_id}
-            for row in _rows_for_export(db, Instrument)
-        ],
-        "contribution_limits": [
-            {
-                "id": row.id,
-                "account_id": row.account_id,
-                "tax_year": row.tax_year,
-                "new_room": row.new_room,
-            }
-            for row in _rows_for_export(db, ContributionLimit)
-        ],
-        "transactions": [
-            {
-                "id": row.id,
-                "transaction_type": row.transaction_type,
-                "transaction_date": row.transaction_date,
-                "account_id": row.account_id,
-                "platform_id": row.platform_id,
-                "instrument_id": row.instrument_id,
-                "category_id": row.category_id,
-                "amount": row.amount,
-                "quantity": row.quantity,
-                "fees": row.fees,
-                "notes": row.notes,
-                "reversal_of_id": row.reversal_of_id,
-                "contribution_id": row.contribution_id,
-                "created_at": row.created_at,
-            }
-            for row in _rows_for_export(db, Transaction)
-        ],
-        "transaction_fundings": [
-            {
-                "id": row.id,
-                "transaction_id": row.transaction_id,
-                "contribution_id": row.contribution_id,
-                "amount": row.amount,
-            }
-            for row in _rows_for_export(db, TransactionFunding)
-        ],
-        "holding_snapshots": [
-            {
-                "id": row.id,
-                "snapshot_date": row.snapshot_date,
-                "snapshot_year": row.snapshot_year,
-                "snapshot_type": row.snapshot_type,
-                "holding_date": row.holding_date,
-                "record_type": row.record_type,
-                "account_id": row.account_id,
-                "platform_id": row.platform_id,
-                "instrument_id": row.instrument_id,
-                "category_id": row.category_id,
-                "market_value": row.market_value,
-            }
-            for row in _rows_for_export(db, HoldingSnapshot)
-        ],
-        "imports": [
-            {
-                "id": row.id,
-                "import_type": row.import_type,
-                "source_filename": row.source_filename,
-                "status": row.status,
-                "created_at": row.created_at,
-            }
-            for row in _rows_for_export(db, Import)
-        ],
-        "import_rows": [
-            {
-                "id": row.id,
-                "import_id": row.import_id,
-                "row_number": row.row_number,
-                "payload_json": row.payload_json,
-                "error": row.error,
-            }
-            for row in _rows_for_export(db, ImportRow)
-        ],
-    }
+    return {table.name: _rows_for_export(db, table) for table in _backup_tables()}
 
 
 def restore_all_data(db: Session, payload: dict):
     data = payload.get("data")
     if not isinstance(data, dict):
         raise ValueError("Backup payload is missing a data object")
+    data = dict(data)
+    for legacy_name, table_name in LEGACY_BACKUP_TABLE_NAMES.items():
+        if legacy_name in data and table_name not in data:
+            data[table_name] = data.pop(legacy_name)
 
-    delete_order = [
-        ImportRow,
-        Import,
-        HoldingSnapshot,
-        TransactionFunding,
-        Transaction,
-        ContributionLimit,
-        Instrument,
-        Category,
-        PlatformAlias,
-        Platform,
-        Account,
-    ]
-    for model in delete_order:
-        db.query(model).delete()
+    tables = _backup_tables()
+    table_names = {table.name for table in tables}
+    unknown_tables = sorted(set(data) - table_names)
+    if unknown_tables:
+        raise ValueError(f"Backup contains unsupported tables: {', '.join(unknown_tables)}")
+    if any(not isinstance(rows, list) for rows in data.values()):
+        raise ValueError("Backup table data must be a list of rows")
+    if any(not isinstance(row, dict) for rows in data.values() for row in rows):
+        raise ValueError("Backup rows must be objects")
+
+    for table in reversed(tables):
+        db.execute(table.delete())
     db.flush()
 
-    for row in data.get("accounts", []):
-        db.add(Account(id=row["id"], name=row["name"]))
-
-    for row in data.get("platforms", []):
-        db.add(Platform(id=row["id"], canonical_name=row["canonical_name"]))
-
-    for row in data.get("platform_aliases", []):
-        db.add(PlatformAlias(id=row["id"], alias=row["alias"], platform_id=row["platform_id"]))
-
-    for row in data.get("categories", []):
-        db.add(Category(id=row["id"], broad=row["broad"], precise=row["precise"]))
-
-    for row in data.get("instruments", []):
-        db.add(
-            Instrument(
-                id=row["id"],
-                symbol=row["symbol"],
-                name=row.get("name"),
-                category_id=row.get("category_id"),
-            )
-        )
-
-    for row in data.get("contribution_limits", []):
-        db.add(
-            ContributionLimit(
-                id=row["id"],
-                account_id=row["account_id"],
-                tax_year=row["tax_year"],
-                new_room=row["new_room"],
-            )
-        )
-
-    transaction_rows = data.get("transactions", [])
-    for row in transaction_rows:
-        db.add(
-            Transaction(
-                id=row["id"],
-                transaction_type=TransactionType(row["transaction_type"]),
-                transaction_date=_parse_date(row["transaction_date"]),
-                account_id=row.get("account_id"),
-                platform_id=row.get("platform_id"),
-                instrument_id=row.get("instrument_id"),
-                category_id=row.get("category_id"),
-                amount=row["amount"],
-                quantity=row.get("quantity"),
-                fees=row.get("fees"),
-                notes=row.get("notes"),
-                reversal_of_id=None,
-                contribution_id=None,
-                created_at=_parse_datetime(row.get("created_at")),
-            )
-        )
+    deferred_references = []
+    for table in tables:
+        self_references = {foreign_key.parent.name for foreign_key in table.foreign_keys if foreign_key.column.table is table}
+        rows = []
+        for row in data.get(table.name, []):
+            values = {
+                column.name: _restore_value(column, row[column.name])
+                for column in table.columns
+                if column.name in row
+            }
+            if self_references:
+                references = {name: values[name] for name in self_references if values.get(name) is not None}
+                if references:
+                    deferred_references.append((table, {column.name: values[column.name] for column in table.primary_key}, references))
+                    values.update({name: None for name in references})
+            rows.append(values)
+        if rows:
+            db.execute(table.insert(), rows)
     db.flush()
-    for row in transaction_rows:
-        txn = db.get(Transaction, row["id"])
-        if txn:
-            if row.get("reversal_of_id") is not None:
-                txn.reversal_of_id = row["reversal_of_id"]
-            if row.get("contribution_id") is not None:
-                txn.contribution_id = row.get("contribution_id")
 
-    for row in data.get("transaction_fundings", []):
-        db.add(
-            TransactionFunding(
-                id=row["id"],
-                transaction_id=row["transaction_id"],
-                contribution_id=row["contribution_id"],
-                amount=row["amount"],
-            )
+    for table, primary_key, references in deferred_references:
+        db.execute(
+            table.update().where(and_(*(table.c[name] == value for name, value in primary_key.items()))).values(**references)
         )
 
-    for row in data.get("holding_snapshots", []):
-        db.add(
-            HoldingSnapshot(
-                id=row["id"],
-                snapshot_date=_parse_date(row["snapshot_date"]),
-                snapshot_year=row.get("snapshot_year"),
-                snapshot_type=row.get("snapshot_type") or "current",
-                holding_date=_parse_date(row.get("holding_date")),
-                record_type=row.get("record_type") or "holding",
-                account_id=row.get("account_id"),
-                platform_id=row.get("platform_id"),
-                instrument_id=row.get("instrument_id"),
-                category_id=row.get("category_id"),
-                market_value=row["market_value"],
-            )
-        )
-
-    for row in data.get("imports", []):
-        db.add(
-            Import(
-                id=row["id"],
-                import_type=ImportType(row["import_type"]),
-                source_filename=row["source_filename"],
-                status=ImportStatus(row["status"]),
-                created_at=_parse_datetime(row.get("created_at")),
-            )
-        )
-
-    for row in data.get("import_rows", []):
-        db.add(
-            ImportRow(
-                id=row["id"],
-                import_id=row["import_id"],
-                row_number=row["row_number"],
-                payload_json=row["payload_json"],
-                error=row.get("error"),
-            )
-        )
-
-    db.commit()
-
-    for model in [Account, Platform, PlatformAlias, Category, Instrument, ContributionLimit, Transaction, TransactionFunding, HoldingSnapshot, Import, ImportRow]:
-        _reset_sequence(db, model)
+    for table in tables:
+        _reset_sequence(db, table)
     db.commit()

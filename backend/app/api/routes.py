@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
@@ -295,7 +296,7 @@ def export_data(db: Session = Depends(get_db)):
         "meta": {
             "exported_at": exported_at,
             "format": "master-control-terminal-export",
-            "version": 1,
+            "version": 2,
         },
         "data": export_all_data(db),
     }
@@ -322,7 +323,7 @@ async def import_backup(file: UploadFile = File(...), db: Session = Depends(get_
 
     try:
         restore_all_data(db, payload)
-    except ValueError as exc:
+    except (ValueError, SQLAlchemyError) as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
