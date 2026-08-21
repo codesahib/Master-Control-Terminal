@@ -14,7 +14,7 @@ function contributionForm(contribution: Contribution | undefined, defaultAccount
   return {
     transaction_date: contribution?.transaction_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
     account_name: contribution?.account_name || defaultAccount,
-    platform_name: contribution?.platform_name || "Wealthsimple",
+    platform_name: contribution ? contribution.platform_name || "" : "Wealthsimple",
     amount: String(contribution?.amount ?? 0),
     notes: contribution?.notes || "",
   };
@@ -23,6 +23,9 @@ function contributionForm(contribution: Contribution | undefined, defaultAccount
 export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution }: Props) {
   const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount));
   const [error, setError] = useState("");
+  const platforms = contribution?.platform_name && !platformOptions.includes(contribution.platform_name)
+    ? [contribution.platform_name, ...platformOptions]
+    : platformOptions;
 
   useEffect(() => {
     setForm(contributionForm(contribution, defaultAccount));
@@ -68,7 +71,8 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
           <div className="field">
             <label>Platform</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-              {platformOptions.map((platform) => (
+              <option value="">No platform</option>
+              {platforms.map((platform) => (
                 <option key={platform} value={platform}>{platform}</option>
               ))}
             </select>

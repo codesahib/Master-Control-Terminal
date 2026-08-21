@@ -1,7 +1,7 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import case, func, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -356,14 +356,62 @@ def list_transactions(db: Session, transaction_type=None, account=None, platform
     return db.execute(q).all()
 
 
-def list_contributions(db: Session, account=None, platform=None, year=None):
-    return list_transactions(
-        db,
-        transaction_type=TransactionType.contribution,
-        account=account,
-        platform=platform,
-        year=year,
+def _rrsp_contribution_deadline(tax_year: int):
+    deadline = date(tax_year + 1, 1, 1) + timedelta(days=59)
+    if deadline.weekday() == 5:
+        return deadline + timedelta(days=2)
+    if deadline.weekday() == 6:
+        return deadline + timedelta(days=1)
+    return deadline
+
+
+def _contribution_tax_year_bounds(account_name: str | None, tax_year: int):
+    if account_name and account_name.lower() == "rrsp":
+        return _rrsp_contribution_deadline(tax_year - 1) + timedelta(days=1), _rrsp_contribution_deadline(tax_year) + timedelta(days=1)
+    return date(tax_year, 1, 1), date(tax_year + 1, 1, 1)
+
+
+def _rrsp_tax_year_filter(tax_year: int):
+    calendar_start, calendar_end = _contribution_tax_year_bounds(None, tax_year)
+    rrsp_start, rrsp_end = _contribution_tax_year_bounds("RRSP", tax_year)
+    return or_(
+        and_(
+            func.lower(Account.name) == "rrsp",
+            Transaction.transaction_date >= rrsp_start,
+            Transaction.transaction_date < rrsp_end,
+        ),
+        and_(
+            or_(Account.name.is_(None), func.lower(Account.name) != "rrsp"),
+            Transaction.transaction_date >= calendar_start,
+            Transaction.transaction_date < calendar_end,
+        ),
     )
+
+
+def list_contributions(db: Session, account=None, platform=None, year=None):
+    q = (
+        select(
+            Transaction,
+            Account.name.label("account_name"),
+            Platform.canonical_name.label("platform_name"),
+            Instrument.symbol.label("symbol"),
+            Category.broad.label("broad_category"),
+            Category.precise.label("precise_category"),
+        )
+        .outerjoin(Account, Transaction.account_id == Account.id)
+        .outerjoin(Platform, Transaction.platform_id == Platform.id)
+        .outerjoin(Instrument, Transaction.instrument_id == Instrument.id)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(Transaction.transaction_type == TransactionType.contribution)
+        .order_by(Transaction.transaction_date.desc(), Transaction.id.desc())
+    )
+    if account:
+        q = q.where(func.lower(Account.name) == account.lower())
+    if platform:
+        q = q.where(func.lower(Platform.canonical_name) == platform.lower())
+    if year:
+        q = q.where(_rrsp_tax_year_filter(year))
+    return db.execute(q).all()
 
 
 def list_account_transactions(db: Session, account=None, platform=None, symbol=None, year=None):
@@ -390,7 +438,7 @@ def list_account_transactions(db: Session, account=None, platform=None, symbol=N
     if symbol:
         q = q.where(func.lower(Instrument.symbol) == symbol.lower())
     if year:
-        q = q.where(func.extract("year", Transaction.transaction_date) == year)
+        q = q.where(_rrsp_tax_year_filter(year))
     return db.execute(q).all()
 
 
@@ -535,12 +583,15 @@ def get_contribution_room(db: Session, tax_year: int):
 
 
 def get_contribution_used(db: Session, account_id: int, tax_year: int):
+    account = db.get(Account, account_id)
+    tax_year_start, next_tax_year_start = _contribution_tax_year_bounds(account.name if account else None, tax_year)
     return float(
         db.scalar(
             select(func.coalesce(func.sum(Transaction.amount), 0)).where(
                 Transaction.account_id == account_id,
                 Transaction.transaction_type == TransactionType.contribution,
-                func.extract("year", Transaction.transaction_date) == tax_year,
+                Transaction.transaction_date >= tax_year_start,
+                Transaction.transaction_date < next_tax_year_start,
             )
         )
         or 0

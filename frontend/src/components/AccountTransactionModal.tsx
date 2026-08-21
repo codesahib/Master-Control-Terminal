@@ -29,7 +29,7 @@ export function AccountTransactionModal({
   const [form, setForm] = useState({
     transaction_date: transaction?.transaction_date || new Date().toISOString().slice(0, 10),
     account_name: transaction?.account_name || defaultAccount,
-    platform_name: transaction?.platform_name || "Wealthsimple",
+    platform_name: transaction ? transaction.platform_name || "" : "Wealthsimple",
     broad_category: transaction?.broad_category || "",
     precise_category: transaction?.precise_category || "",
     symbol: transaction?.symbol || "",
@@ -40,6 +40,9 @@ export function AccountTransactionModal({
     notes: transaction?.notes || "",
     contribution_id: transaction?.contribution_id ? String(transaction.contribution_id) : "",
   });
+  const platforms = transaction?.platform_name && !platformOptions.includes(transaction.platform_name)
+    ? [transaction.platform_name, ...platformOptions]
+    : platformOptions;
   const [error, setError] = useState("");
   const [contributions, setContributions] = useState<ContributionFunding[]>([]);
 
@@ -127,7 +130,8 @@ export function AccountTransactionModal({
           <div className="field">
             <label>Platform</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-              {platformOptions.map((platform) => (
+              <option value="">No platform</option>
+              {platforms.map((platform) => (
                 <option key={platform} value={platform}>{platform}</option>
               ))}
             </select>
