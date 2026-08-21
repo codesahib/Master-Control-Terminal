@@ -56,6 +56,7 @@ router = APIRouter()
 def serialize_transaction(txn, db: Session) -> TransactionRead:
     account = db.get(Account, txn.account_id) if txn.account_id else None
     platform = db.get(Platform, txn.platform_id) if txn.platform_id else None
+    source_platform = db.get(Platform, txn.source_platform_id) if txn.source_platform_id else None
     instrument = db.get(Instrument, txn.instrument_id) if txn.instrument_id else None
     category = db.get(Category, txn.category_id) if txn.category_id else None
     return TransactionRead(
@@ -64,6 +65,7 @@ def serialize_transaction(txn, db: Session) -> TransactionRead:
         transaction_date=txn.transaction_date,
         account_name=account.name if account else None,
         platform_name=platform.canonical_name if platform else None,
+        source_platform_name=source_platform.canonical_name if source_platform else None,
         symbol=instrument.symbol if instrument else None,
         broad_category=category.broad if category else None,
         precise_category=category.precise if category else None,
@@ -84,6 +86,7 @@ def serialize_transaction_row(row, db: Session) -> TransactionRead:
         transaction_date=txn.transaction_date,
         account_name=account_name,
         platform_name=platform_name,
+        source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
         symbol=symbol_name,
         broad_category=broad_category,
         precise_category=precise_category,
@@ -116,6 +119,7 @@ def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRea
         transaction_date=txn.transaction_date,
         account_name=account_name,
         platform_name=platform_name,
+        source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
         symbol=symbol_name,
         broad_category=broad_category,
         precise_category=precise_category,
@@ -197,11 +201,10 @@ def list_contributions_endpoint(
 @router.get("/available-contributions", response_model=list[ContributionFundingRead])
 def list_available_contributions_endpoint(
     account: str,
-    include_contribution_id: int | None = None,
-    include_contribution_ids: list[int] = Query(default=[]),
+    exclude_transaction_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    return list_available_contributions(db, account, include_contribution_id, set(include_contribution_ids))
+    return list_available_contributions(db, account, db.get(Transaction, exclude_transaction_id) if exclude_transaction_id else None)
 
 
 @router.post("/account-transactions", response_model=AccountTransactionRead)

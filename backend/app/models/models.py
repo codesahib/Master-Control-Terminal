@@ -83,6 +83,7 @@ class Transaction(Base):
     transaction_date: Mapped[date] = mapped_column(Date, index=True)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
     platform_id: Mapped[int | None] = mapped_column(ForeignKey("platforms.id"), nullable=True, index=True)
+    source_platform_id: Mapped[int | None] = mapped_column(ForeignKey("platforms.id"), nullable=True, index=True)
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)

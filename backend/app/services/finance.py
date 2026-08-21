@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, case, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.db.session import Base
 from app.models.models import (
@@ -211,6 +211,7 @@ def _save_transaction(
 ) -> Transaction:
     account = get_or_create_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
+    source_platform = normalize_platform(db, getattr(payload, "source_platform_name", None))
     symbol = getattr(payload, "symbol", None)
     instrument_name = getattr(payload, "instrument_name", None)
     broad_category = getattr(payload, "broad_category", None)
@@ -231,6 +232,7 @@ def _save_transaction(
     txn.transaction_date = payload.transaction_date
     txn.account_id = account.id if account else None
     txn.platform_id = platform.id if platform else None
+    txn.source_platform_id = source_platform.id if source_platform else None
     txn.instrument_id = instrument.id if instrument else None
     txn.category_id = category.id if category else None
     txn.amount = payload.amount
@@ -282,7 +284,30 @@ def update_account_transaction(db: Session, transaction_id: int, payload: Accoun
     return _save_transaction(db, payload, txn=txn)
 
 
-def _funding_contributions(payload: AccountTransactionCreate):
+def _funding_contributions(
+    db: Session, payload: AccountTransactionCreate, transaction: Transaction | None = None
+):
+    if payload.funding_cash_sources:
+        sources = _available_funding_transactions(db, payload.account_name, transaction)
+        allocations = []
+        for cash_source in payload.funding_cash_sources:
+            remaining_to_allocate = float(cash_source.amount)
+            platform_sources = [
+                source
+                for source in sources
+                if source["platform_name"].lower() == cash_source.platform_name.lower()
+            ]
+            available = round(sum(source["remaining_amount"] for source in platform_sources), 2)
+            if round(remaining_to_allocate, 2) > available:
+                raise ValueError(f"{cash_source.platform_name} cash has only ${available:.2f} remaining")
+            for source in platform_sources:
+                amount = min(remaining_to_allocate, source["remaining_amount"])
+                if amount:
+                    allocations.append({"contribution_id": source["id"], "amount": amount})
+                    remaining_to_allocate = round(remaining_to_allocate - amount, 2)
+                if not remaining_to_allocate:
+                    break
+        return allocations
     if payload.funding_contributions:
         return payload.funding_contributions
     if payload.contribution_id:
@@ -304,7 +329,7 @@ def _replace_transaction_fundings(db: Session, transaction: Transaction, payload
                 contribution_id=funding.contribution_id if hasattr(funding, "contribution_id") else funding["contribution_id"],
                 amount=funding.amount if hasattr(funding, "amount") else funding["amount"],
             )
-            for funding in _funding_contributions(payload)
+            for funding in _funding_contributions(db, payload, transaction)
         ]
     )
 
@@ -329,11 +354,17 @@ def _contribution_usage(db: Session, contribution_id: int, transaction: Transact
 def _validate_contribution_funding(
     db: Session, payload: AccountTransactionCreate, transaction: Transaction | None = None
 ) -> None:
-    fundings = _funding_contributions(payload)
-    if payload.transaction_type != TransactionType.investment_buy:
+    fundings = _funding_contributions(db, payload, transaction)
+    if payload.transaction_type not in {TransactionType.investment_buy, TransactionType.transfer}:
         if fundings:
-            raise ValueError("funding contributions are only supported for investment buys")
+            raise ValueError("funding sources are only supported for investment buys and transfers")
         return
+
+    if payload.transaction_type == TransactionType.transfer:
+        if not payload.source_platform_name:
+            raise ValueError("source platform is required for transfers")
+        if payload.source_platform_name.lower() == payload.platform_name.lower():
+            raise ValueError("transfer source and destination platforms must differ")
 
     if not fundings:
         return
@@ -346,69 +377,78 @@ def _validate_contribution_funding(
         contribution_id = funding.contribution_id if hasattr(funding, "contribution_id") else funding["contribution_id"]
         amount = float(funding.amount if hasattr(funding, "amount") else funding["amount"])
         contribution = db.get(Transaction, contribution_id)
-        if not contribution or contribution.transaction_type != TransactionType.contribution:
-            raise ValueError("selected contribution was not found")
+        if not contribution or contribution.transaction_type not in {
+            TransactionType.contribution,
+            TransactionType.dividend_interest,
+            TransactionType.transfer,
+        }:
+            raise ValueError("selected funding source was not found")
 
         contribution_account = db.get(Account, contribution.account_id) if contribution.account_id else None
         if not contribution_account or contribution_account.name.lower() != payload.account_name.lower():
-            raise ValueError("selected contribution belongs to a different account")
+            raise ValueError("selected funding source belongs to a different account")
+        if payload.transaction_type == TransactionType.transfer:
+            funding_platform = db.get(Platform, contribution.platform_id) if contribution.platform_id else None
+            if not funding_platform or funding_platform.canonical_name.lower() != payload.source_platform_name.lower():
+                raise ValueError("transfer funding sources must belong to the source platform")
         remaining = float(contribution.amount) - _contribution_usage(db, contribution.id, transaction)
         if round(amount, 2) > round(remaining, 2):
-            raise ValueError(f"selected contribution has only ${remaining:.2f} remaining")
+            raise ValueError(f"selected funding source has only ${remaining:.2f} remaining")
 
 
 def list_available_contributions(
     db: Session,
     account: str,
-    include_contribution_id: int | None = None,
-    include_contribution_ids: set[int] | None = None,
+    transaction: Transaction | None = None,
+):
+    sources = _available_funding_transactions(db, account, transaction)
+    available = {}
+    for source in sources:
+        platform_name = source["platform_name"]
+        if not platform_name:
+            continue
+        pool = available.setdefault(
+            platform_name,
+            {
+                "id": source["platform_id"],
+                "platform_name": platform_name,
+                "source_label": "Cash",
+                "remaining_amount": 0.0,
+            },
+        )
+        pool["remaining_amount"] = round(pool["remaining_amount"] + source["remaining_amount"], 2)
+    return sorted(available.values(), key=lambda pool: pool["platform_name"].lower())
+
+
+def _available_funding_transactions(
+    db: Session, account: str, transaction: Transaction | None = None
 ):
     contributions = db.execute(
         select(Transaction, Platform.canonical_name)
         .join(Account, Transaction.account_id == Account.id)
         .outerjoin(Platform, Transaction.platform_id == Platform.id)
-        .where(Transaction.transaction_type == TransactionType.contribution, func.lower(Account.name) == account.lower())
+        .where(
+            Transaction.transaction_type.in_(
+                [TransactionType.contribution, TransactionType.dividend_interest, TransactionType.transfer]
+            ),
+            func.lower(Account.name) == account.lower(),
+        )
         .order_by(Transaction.transaction_date, Transaction.id)
     ).all()
-    usage = dict(
-        db.execute(
-            select(
-                TransactionFunding.contribution_id,
-                func.coalesce(func.sum(TransactionFunding.amount), 0),
-            )
-            .group_by(TransactionFunding.contribution_id)
-        ).all()
-    )
-    legacy_usage = db.execute(
-        select(
-            Transaction.contribution_id,
-            func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0),
+    available = []
+    for contribution, platform_name in contributions:
+        remaining = round(float(contribution.amount) - _contribution_usage(db, contribution.id, transaction), 2)
+        if remaining <= 0:
+            continue
+        available.append(
+            {
+                "id": contribution.id,
+                "platform_name": platform_name,
+                "platform_id": contribution.platform_id,
+                "remaining_amount": remaining,
+            }
         )
-        .outerjoin(TransactionFunding, TransactionFunding.transaction_id == Transaction.id)
-        .where(
-            Transaction.contribution_id.is_not(None),
-            Transaction.transaction_type == TransactionType.investment_buy,
-            TransactionFunding.id.is_(None),
-        )
-        .group_by(Transaction.contribution_id)
-    ).all()
-    for contribution_id, amount in legacy_usage:
-        usage[contribution_id] = float(usage.get(contribution_id, 0)) + float(amount)
-    include_ids = set(include_contribution_ids or [])
-    if include_contribution_id:
-        include_ids.add(include_contribution_id)
-    return [
-        {
-            "id": contribution.id,
-            "transaction_date": contribution.transaction_date,
-            "platform_name": platform_name,
-            "amount": float(contribution.amount),
-            "remaining_amount": round(float(contribution.amount) - float(usage.get(contribution.id, 0)), 2),
-        }
-        for contribution, platform_name in contributions
-        if round(float(contribution.amount) - float(usage.get(contribution.id, 0)), 2) > 0
-        or contribution.id in include_ids
-    ]
+    return available
 
 
 def list_transaction_fundings(db: Session, transaction: Transaction):
@@ -418,9 +458,23 @@ def list_transaction_fundings(db: Session, transaction: Transaction):
         .order_by(TransactionFunding.id)
     ).all()
     if fundings:
-        return [{"contribution_id": funding.contribution_id, "amount": float(funding.amount)} for funding in fundings]
+        result = []
+        for funding in fundings:
+            source = db.get(Transaction, funding.contribution_id)
+            platform = db.get(Platform, source.platform_id) if source and source.platform_id else None
+            result.append({
+                "contribution_id": funding.contribution_id,
+                "amount": float(funding.amount),
+                "platform_name": platform.canonical_name if platform else None,
+            })
+        return result
     if transaction.contribution_id:
-        return [{"contribution_id": transaction.contribution_id, "amount": float(transaction.amount) + float(transaction.fees or 0)}]
+        source = db.get(Transaction, transaction.contribution_id)
+        return [{
+            "contribution_id": transaction.contribution_id,
+            "amount": float(transaction.amount) + float(transaction.fees or 0),
+            "platform_name": db.get(Platform, source.platform_id).canonical_name if source and source.platform_id else None,
+        }]
     return []
 
 
@@ -541,16 +595,19 @@ def list_account_transactions(db: Session, account=None, platform=None, symbol=N
 
 def list_holdings(db: Session, account=None, year=None):
     as_of_date = date.today() if year is None or year >= date.today().year else date(year, 12, 31)
+    source_platform = aliased(Platform)
     q = (
         select(
             Transaction,
             Account,
             Platform,
+            source_platform,
             Instrument,
             Category,
         )
         .outerjoin(Account, Transaction.account_id == Account.id)
         .outerjoin(Platform, Transaction.platform_id == Platform.id)
+        .outerjoin(source_platform, Transaction.source_platform_id == source_platform.id)
         .outerjoin(Instrument, Transaction.instrument_id == Instrument.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(Transaction.transaction_date <= as_of_date)
@@ -561,7 +618,7 @@ def list_holdings(db: Session, account=None, year=None):
 
     cash = {}
     positions = {}
-    for txn, account_row, platform, instrument, category in db.execute(q):
+    for txn, account_row, platform, source_platform_row, instrument, category in db.execute(q):
         if not account_row:
             continue
 
@@ -580,6 +637,20 @@ def list_holdings(db: Session, account=None, year=None):
             continue
         if txn.transaction_type == TransactionType.dividend_interest:
             cash[cash_key]["book_value"] += float(txn.amount) - float(txn.fees or 0)
+            continue
+        if txn.transaction_type == TransactionType.transfer:
+            if source_platform_row:
+                source_cash_key = (account_row.id, source_platform_row.id)
+                cash.setdefault(
+                    source_cash_key,
+                    {
+                        "account_name": account_row.name,
+                        "platform_name": source_platform_row.canonical_name,
+                        "book_value": 0.0,
+                    },
+                )
+                cash[source_cash_key]["book_value"] -= float(txn.amount) + float(txn.fees or 0)
+                cash[cash_key]["book_value"] += float(txn.amount)
             continue
         if txn.transaction_type not in {
             TransactionType.investment_buy,
@@ -631,7 +702,8 @@ def list_holdings(db: Session, account=None, year=None):
 
     holdings = []
     for (account_id, platform_id), row in cash.items():
-        if row["book_value"]:
+        book_value = round(row["book_value"], 2)
+        if book_value:
             holdings.append(
                 {
                     "id": f"cash:{account_id}:{platform_id or 0}",
@@ -643,7 +715,7 @@ def list_holdings(db: Session, account=None, year=None):
                     "precise_category": "Cash",
                     "record_type": "cash",
                     "quantity": None,
-                    "book_value": row["book_value"],
+                    "book_value": book_value,
                 }
             )
     for (account_id, platform_id, instrument_id), row in positions.items():

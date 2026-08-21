@@ -21,6 +21,7 @@ export interface Contribution extends ActivityRecord {}
 
 export interface AccountTransaction extends ActivityRecord {
   transaction_type: AccountTransactionType;
+  source_platform_name?: string;
   symbol?: string;
   broad_category?: string;
   precise_category?: string;
@@ -33,14 +34,19 @@ export interface AccountTransaction extends ActivityRecord {
 export interface FundingContribution {
   contribution_id: number;
   amount: number;
+  platform_name?: string;
 }
 
 export interface ContributionFunding {
   id: number;
-  transaction_date: string;
-  platform_name?: string;
-  amount: number;
+  platform_name: string;
+  source_label: string;
   remaining_amount: number;
+}
+
+export interface FundingCashSource {
+  platform_name: string;
+  amount: number;
 }
 
 export interface Holding {

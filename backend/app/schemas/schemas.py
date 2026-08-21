@@ -26,7 +26,6 @@ class TransactionCreate(BaseModel):
         if self.transaction_type in {
             TransactionType.investment_buy,
             TransactionType.investment_sell,
-            TransactionType.dividend_interest,
             TransactionType.dividend_reinvestment,
         } and not self.symbol:
             raise ValueError("symbol is required for investment and dividend transactions")
@@ -54,6 +53,12 @@ class ContributionCreate(BaseModel):
 class FundingContribution(BaseModel):
     contribution_id: int = Field(gt=0)
     amount: float = Field(gt=0)
+    platform_name: Optional[str] = None
+
+
+class FundingCashSource(BaseModel):
+    platform_name: str = Field(min_length=1)
+    amount: float = Field(gt=0)
 
 
 class AccountTransactionCreate(BaseModel):
@@ -61,6 +66,7 @@ class AccountTransactionCreate(BaseModel):
     transaction_date: date
     account_name: str = Field(min_length=1)
     platform_name: str = Field(min_length=1)
+    source_platform_name: Optional[str] = None
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
     broad_category: Optional[str] = None
@@ -72,15 +78,20 @@ class AccountTransactionCreate(BaseModel):
     reversal_of_id: Optional[int] = None
     contribution_id: Optional[int] = Field(default=None, gt=0)
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
+    funding_cash_sources: list[FundingCashSource] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_account_transaction(self):
         if self.transaction_type == TransactionType.contribution:
             raise ValueError("use the contribution endpoints for contribution records")
+        if (self.contribution_id or self.funding_contributions) and self.funding_cash_sources:
+            raise ValueError("use either funding contributions or funding cash sources")
         if self.contribution_id and self.funding_contributions:
             raise ValueError("use either contribution_id or funding_contributions")
         if len({funding.contribution_id for funding in self.funding_contributions}) != len(self.funding_contributions):
             raise ValueError("funding contributions must be unique")
+        if len({source.platform_name.lower() for source in self.funding_cash_sources}) != len(self.funding_cash_sources):
+            raise ValueError("funding cash sources must be unique")
         if self.transaction_type == TransactionType.dividend_reinvestment and (
             not self.symbol or self.quantity is None or self.quantity <= 0 or self.amount <= 0
         ):
@@ -94,6 +105,7 @@ class TransactionRead(BaseModel):
     transaction_date: date
     account_name: Optional[str]
     platform_name: Optional[str]
+    source_platform_name: Optional[str] = None
     symbol: Optional[str]
     broad_category: Optional[str]
     precise_category: Optional[str]
@@ -120,6 +132,7 @@ class AccountTransactionRead(BaseModel):
     transaction_date: date
     account_name: Optional[str]
     platform_name: Optional[str]
+    source_platform_name: Optional[str] = None
     symbol: Optional[str]
     broad_category: Optional[str]
     precise_category: Optional[str]
@@ -133,9 +146,8 @@ class AccountTransactionRead(BaseModel):
 
 class ContributionFundingRead(BaseModel):
     id: int
-    transaction_date: date
-    platform_name: Optional[str]
-    amount: float
+    platform_name: str
+    source_label: str
     remaining_amount: float
 
 
