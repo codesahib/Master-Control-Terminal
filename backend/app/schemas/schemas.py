@@ -27,9 +27,14 @@ class TransactionCreate(BaseModel):
             TransactionType.investment_buy,
             TransactionType.investment_sell,
             TransactionType.dividend_interest,
+            TransactionType.dividend_reinvestment,
         } and not self.symbol:
             raise ValueError("symbol is required for investment and dividend transactions")
-        if self.transaction_type in {TransactionType.investment_buy, TransactionType.investment_sell} and (
+        if self.transaction_type in {
+            TransactionType.investment_buy,
+            TransactionType.investment_sell,
+            TransactionType.dividend_reinvestment,
+        } and (
             self.quantity is None or self.quantity <= 0
         ):
             raise ValueError("quantity is required for investment buys and sells")
@@ -44,6 +49,11 @@ class ContributionCreate(BaseModel):
     platform_name: Optional[str] = None
     amount: float = Field(ge=0)
     notes: Optional[str] = None
+
+
+class FundingContribution(BaseModel):
+    contribution_id: int = Field(gt=0)
+    amount: float = Field(gt=0)
 
 
 class AccountTransactionCreate(BaseModel):
@@ -61,13 +71,20 @@ class AccountTransactionCreate(BaseModel):
     notes: Optional[str] = None
     reversal_of_id: Optional[int] = None
     contribution_id: Optional[int] = Field(default=None, gt=0)
+    funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_account_transaction(self):
         if self.transaction_type == TransactionType.contribution:
             raise ValueError("use the contribution endpoints for contribution records")
-        if self.transaction_type == TransactionType.investment_buy and not self.contribution_id:
-            raise ValueError("select a contribution before recording an investment buy")
+        if self.contribution_id and self.funding_contributions:
+            raise ValueError("use either contribution_id or funding_contributions")
+        if len({funding.contribution_id for funding in self.funding_contributions}) != len(self.funding_contributions):
+            raise ValueError("funding contributions must be unique")
+        if self.transaction_type == TransactionType.dividend_reinvestment and (
+            not self.symbol or self.quantity is None or self.quantity <= 0 or self.amount <= 0
+        ):
+            raise ValueError("dividend reinvestments require a symbol, positive quantity, and positive amount")
         return self
 
 
@@ -85,6 +102,7 @@ class TransactionRead(BaseModel):
     fees: Optional[float]
     notes: Optional[str]
     contribution_id: Optional[int] = None
+    funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
 
 class ContributionRead(BaseModel):
@@ -110,6 +128,7 @@ class AccountTransactionRead(BaseModel):
     fees: Optional[float]
     notes: Optional[str]
     contribution_id: Optional[int] = None
+    funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
 
 class ContributionFundingRead(BaseModel):

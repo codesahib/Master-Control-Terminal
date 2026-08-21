@@ -13,6 +13,7 @@ class TransactionType(str, enum.Enum):
     investment_sell = "investment_sell"
     transfer = "transfer"
     dividend_interest = "dividend_interest"
+    dividend_reinvestment = "dividend_reinvestment"
 
 
 class ImportType(str, enum.Enum):
@@ -91,6 +92,15 @@ class Transaction(Base):
     reversal_of_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
     contribution_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TransactionFunding(Base):
+    __tablename__ = "transaction_fundings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.id", ondelete="CASCADE"), index=True)
+    contribution_id: Mapped[int] = mapped_column(ForeignKey("transactions.id"), index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))
 
 
 class HoldingSnapshot(Base):

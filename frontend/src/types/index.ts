@@ -3,7 +3,8 @@ export type TransactionType =
   | "investment_buy"
   | "investment_sell"
   | "transfer"
-  | "dividend_interest";
+  | "dividend_interest"
+  | "dividend_reinvestment";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 
@@ -26,6 +27,12 @@ export interface AccountTransaction extends ActivityRecord {
   quantity?: number;
   fees?: number;
   contribution_id?: number;
+  funding_contributions?: FundingContribution[];
+}
+
+export interface FundingContribution {
+  contribution_id: number;
+  amount: number;
 }
 
 export interface ContributionFunding {

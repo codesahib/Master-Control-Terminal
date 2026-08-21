@@ -13,6 +13,15 @@ def test_investment_requires_symbol():
         )
 
 
+def test_dividend_reinvestment_requires_symbol_and_quantity():
+    with pytest.raises(ValueError):
+        TransactionCreate(
+            transaction_type=TransactionType.dividend_reinvestment,
+            transaction_date="2026-01-01",
+            amount=100,
+        )
+
+
 def test_transfer_requires_notes():
     with pytest.raises(ValueError):
         TransactionCreate(
@@ -52,15 +61,15 @@ def test_account_transaction_rejects_contribution_type():
         )
 
 
-def test_account_investment_requires_contribution():
-    with pytest.raises(ValueError):
-        AccountTransactionCreate(
-            transaction_type=TransactionType.investment_buy,
-            transaction_date="2026-01-01",
-            account_name="TFSA",
-            platform_name="Wealthsimple",
-            amount=100,
-        )
+def test_account_investment_allows_optional_funding():
+    unfunded = AccountTransactionCreate(
+        transaction_type=TransactionType.investment_buy,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Wealthsimple",
+        amount=100,
+    )
+    assert unfunded.funding_contributions == []
 
     txn = AccountTransactionCreate(
         transaction_type=TransactionType.investment_buy,
@@ -72,6 +81,28 @@ def test_account_investment_requires_contribution():
     )
     assert txn.symbol is None
     assert txn.precise_category is None
+
+
+def test_dividend_reinvestment_requires_holding_details_but_not_a_contribution():
+    txn = AccountTransactionCreate(
+        transaction_type=TransactionType.dividend_reinvestment,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Wealthsimple",
+        symbol="XEQT",
+        amount=100,
+        quantity=1,
+    )
+    assert txn.contribution_id is None
+
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.dividend_reinvestment,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Wealthsimple",
+            amount=100,
+        )
 
 
 def test_account_transaction_requires_account_and_platform():

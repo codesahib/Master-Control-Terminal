@@ -39,6 +39,7 @@ from app.services.finance import (
     list_contributions,
     list_holdings,
     list_contribution_limits,
+    list_transaction_fundings,
     list_transactions,
     restore_all_data,
     timeseries,
@@ -70,10 +71,11 @@ def serialize_transaction(txn, db: Session) -> TransactionRead:
         fees=float(txn.fees or 0),
         notes=txn.notes,
         contribution_id=txn.contribution_id,
+        funding_contributions=list_transaction_fundings(db, txn),
     )
 
 
-def serialize_transaction_row(row) -> TransactionRead:
+def serialize_transaction_row(row, db: Session) -> TransactionRead:
     txn, account_name, platform_name, symbol_name, broad_category, precise_category = row
     return TransactionRead(
         id=txn.id,
@@ -89,6 +91,7 @@ def serialize_transaction_row(row) -> TransactionRead:
         fees=float(txn.fees or 0),
         notes=txn.notes,
         contribution_id=txn.contribution_id,
+        funding_contributions=list_transaction_fundings(db, txn),
     )
 
 
@@ -104,7 +107,7 @@ def serialize_contribution_row(row) -> ContributionRead:
     )
 
 
-def serialize_account_transaction_row(row) -> AccountTransactionRead:
+def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRead:
     txn, account_name, platform_name, symbol_name, broad_category, precise_category = row
     return AccountTransactionRead(
         id=txn.id,
@@ -120,6 +123,7 @@ def serialize_account_transaction_row(row) -> AccountTransactionRead:
         fees=float(txn.fees or 0),
         notes=txn.notes,
         contribution_id=txn.contribution_id,
+        funding_contributions=list_transaction_fundings(db, txn),
     )
 
 
@@ -147,7 +151,7 @@ def list_transactions_endpoint(
     db: Session = Depends(get_db),
 ):
     rows = list_transactions(db, transaction_type, account, platform, symbol, year)
-    return [serialize_transaction_row(row) for row in rows]
+    return [serialize_transaction_row(row, db) for row in rows]
 
 
 @router.post("/contributions", response_model=ContributionRead)
@@ -193,20 +197,29 @@ def list_contributions_endpoint(
 def list_available_contributions_endpoint(
     account: str,
     include_contribution_id: int | None = None,
+    include_contribution_ids: list[int] = Query(default=[]),
     db: Session = Depends(get_db),
 ):
-    return list_available_contributions(db, account, include_contribution_id)
+    return list_available_contributions(db, account, include_contribution_id, set(include_contribution_ids))
 
 
 @router.post("/account-transactions", response_model=AccountTransactionRead)
 def create_account_transaction_endpoint(payload: AccountTransactionCreate, db: Session = Depends(get_db)):
-    txn = create_account_transaction(db, payload)
+    try:
+        txn = create_account_transaction(db, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return serialize_transaction(txn, db)
 
 
 @router.put("/account-transactions/{transaction_id}", response_model=AccountTransactionRead)
 def update_account_transaction_endpoint(transaction_id: int, payload: AccountTransactionCreate, db: Session = Depends(get_db)):
-    txn = update_account_transaction(db, transaction_id, payload)
+    try:
+        txn = update_account_transaction(db, transaction_id, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not txn:
         raise HTTPException(status_code=404, detail="Account transaction not found")
     return serialize_transaction(txn, db)
@@ -221,7 +234,7 @@ def list_account_transactions_endpoint(
     db: Session = Depends(get_db),
 ):
     rows = list_account_transactions(db, account=account, platform=platform, symbol=symbol, year=year)
-    return [serialize_account_transaction_row(row) for row in rows]
+    return [serialize_account_transaction_row(row, db) for row in rows]
 
 
 @router.get("/holdings", response_model=list[HoldingRead])

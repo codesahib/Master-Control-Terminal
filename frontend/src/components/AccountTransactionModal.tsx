@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import { AccountTransaction, AccountTransactionType, ContributionFunding } from "../types";
+import { AccountTransaction, AccountTransactionType, ContributionFunding, FundingContribution } from "../types";
 import {
   accountTransactionOptions,
   categoryOptions,
@@ -38,16 +38,18 @@ export function AccountTransactionModal({
     quantity: transaction?.quantity ? String(transaction.quantity) : "",
     fees: String(transaction?.fees ?? 0),
     notes: transaction?.notes || "",
-    contribution_id: transaction?.contribution_id ? String(transaction.contribution_id) : "",
   });
   const platforms = transaction?.platform_name && !platformOptions.includes(transaction.platform_name)
     ? [transaction.platform_name, ...platformOptions]
     : platformOptions;
   const [error, setError] = useState("");
   const [contributions, setContributions] = useState<ContributionFunding[]>([]);
+  const [fundingContributions, setFundingContributions] = useState<FundingContribution[]>(
+    transaction?.funding_contributions || []
+  );
 
   const requiresSymbol = useMemo(
-    () => ["investment_buy", "investment_sell", "dividend_interest"].includes(transactionType),
+    () => ["investment_buy", "investment_sell", "dividend_interest", "dividend_reinvestment"].includes(transactionType),
     [transactionType]
   );
   const requiresContribution = transactionType === "investment_buy";
@@ -59,10 +61,40 @@ export function AccountTransactionModal({
     }
     api
       .get<ContributionFunding[]>("/available-contributions", {
-        params: { account: form.account_name, include_contribution_id: transaction?.contribution_id },
+        params: {
+          account: form.account_name,
+          include_contribution_id: transaction?.contribution_id,
+          include_contribution_ids: transaction?.funding_contributions?.map((funding) => funding.contribution_id),
+        },
+        paramsSerializer: { indexes: null },
       })
       .then((response) => setContributions(response.data));
   }, [form.account_name, requiresContribution, transaction?.contribution_id]);
+
+  function toggleFundingContribution(contribution: ContributionFunding) {
+    setFundingContributions((current) =>
+      current.some((funding) => funding.contribution_id === contribution.id)
+        ? current.filter((funding) => funding.contribution_id !== contribution.id)
+        : [...current, { contribution_id: contribution.id, amount: 0 }]
+    );
+  }
+
+  function updateFundingAmount(contributionId: number, amount: string) {
+    setFundingContributions((current) =>
+      current.map((funding) =>
+        funding.contribution_id === contributionId ? { ...funding, amount: Number(amount) || 0 } : funding
+      )
+    );
+  }
+
+  function useRemainingAmount(contribution: ContributionFunding) {
+    const total = Number(form.amount || 0) + Number(form.fees || 0);
+    const allocatedElsewhere = fundingContributions
+      .filter((funding) => funding.contribution_id !== contribution.id)
+      .reduce((sum, funding) => sum + funding.amount, 0);
+    const amount = Math.max(0, Math.min(contribution.remaining_amount, total - allocatedElsewhere));
+    updateFundingAmount(contribution.id, String(Math.round(amount * 100) / 100));
+  }
 
   async function submit() {
     setError("");
@@ -70,8 +102,8 @@ export function AccountTransactionModal({
       setError("Amount, date, account, and platform are required");
       return;
     }
-    if (requiresContribution && !form.contribution_id) {
-      setError("Select a contribution before recording an investment buy");
+    if (requiresContribution && fundingContributions.some((funding) => funding.amount <= 0)) {
+      setError("Funding contribution amounts must be greater than zero");
       return;
     }
 
@@ -89,7 +121,7 @@ export function AccountTransactionModal({
         quantity: requiresSymbol && form.quantity ? Number(form.quantity) : null,
         fees: Number(form.fees || 0),
         notes: form.notes || null,
-        contribution_id: requiresContribution ? Number(form.contribution_id) : null,
+        funding_contributions: requiresContribution ? fundingContributions : [],
       };
 
       if (transaction) {
@@ -102,6 +134,7 @@ export function AccountTransactionModal({
       onClose();
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
+      console.error("Failed to save account transaction", { detail, error: e });
       setError(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail?.toString() || "Failed to save account transaction");
     }
   }
@@ -126,7 +159,7 @@ export function AccountTransactionModal({
         <div className="form-grid">
           <div className="field"><label>Date</label><input type="date" value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
           <div className="field"><label>Amount</label><input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value, contribution_id: "" })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
+          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => { setForm({ ...form, account_name: e.target.value }); setFundingContributions([]); }}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
           <div className="field">
             <label>Platform</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
@@ -136,7 +169,26 @@ export function AccountTransactionModal({
               ))}
             </select>
           </div>
-          {requiresContribution && <div className="field"><label>Funding Contribution</label><select value={form.contribution_id} onChange={(e) => setForm({ ...form, contribution_id: e.target.value })}><option value="">Select a contribution</option>{contributions.map((contribution) => <option key={contribution.id} value={contribution.id}>{contribution.transaction_date} · {contribution.platform_name || "No platform"} · ${contribution.remaining_amount.toFixed(2)} remaining</option>)}</select></div>}
+          {requiresContribution && (
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
+              <label>Funding Contributions (optional)</label>
+              {contributions.map((contribution) => {
+                const funding = fundingContributions.find((item) => item.contribution_id === contribution.id);
+                return (
+                  <div key={contribution.id} style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <label>
+                      <input type="checkbox" checked={Boolean(funding)} onChange={() => toggleFundingContribution(contribution)} />
+                      {" "}{contribution.transaction_date} · {contribution.platform_name || "No platform"} · ${contribution.remaining_amount.toFixed(2)} remaining
+                    </label>
+                    {funding && <>
+                      <input aria-label={`Funding amount for ${contribution.transaction_date}`} type="number" min="0.01" step="0.01" value={funding.amount || ""} onChange={(e) => updateFundingAmount(contribution.id, e.target.value)} />
+                      <button type="button" className="btn-secondary btn" onClick={() => useRemainingAmount(contribution)}>Use remaining amount</button>
+                    </>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <div className="field">
             <label>Broad Category</label>
             <select

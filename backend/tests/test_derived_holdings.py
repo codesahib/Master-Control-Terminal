@@ -59,6 +59,17 @@ def test_holdings_are_derived_from_transactions_not_snapshots():
                     amount=20,
                     fees=0,
                 ),
+                Transaction(
+                    transaction_type=TransactionType.dividend_reinvestment,
+                    transaction_date=date(2025, 1, 5),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    category_id=category.id,
+                    amount=20,
+                    quantity=0.2,
+                    fees=0,
+                ),
                 HoldingSnapshot(
                     snapshot_date=date(2025, 1, 4),
                     account_id=account.id,
@@ -74,9 +85,9 @@ def test_holdings_are_derived_from_transactions_not_snapshots():
         holdings = {row["symbol"]: row for row in list_holdings(db, account="TFSA", year=2025)}
 
         assert holdings["Cash"]["book_value"] == 720
-        assert holdings["XEQT"]["quantity"] == 4
-        assert holdings["XEQT"]["book_value"] == 400
+        assert holdings["XEQT"]["quantity"] == 4.2
+        assert holdings["XEQT"]["book_value"] == 420
         assert {row["label"]: row["value"] for row in distribution(db, "sector", year=2025)} == {
-            "All Equity": 400,
+            "All Equity": 420,
             "Cash": 720,
         }

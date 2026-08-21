@@ -17,6 +17,7 @@ from app.models.models import (
     Platform,
     PlatformAlias,
     Transaction,
+    TransactionFunding,
     TransactionType,
 )
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
@@ -227,6 +228,9 @@ def _save_transaction(
     txn.notes = payload.notes
     txn.reversal_of_id = reversal_of_id
     txn.contribution_id = contribution_id
+    db.flush()
+    if isinstance(payload, AccountTransactionCreate):
+        _replace_transaction_fundings(db, txn, payload)
     db.commit()
     db.refresh(txn)
     return txn
@@ -267,32 +271,87 @@ def update_account_transaction(db: Session, transaction_id: int, payload: Accoun
     return _save_transaction(db, payload, txn=txn)
 
 
+def _funding_contributions(payload: AccountTransactionCreate):
+    if payload.funding_contributions:
+        return payload.funding_contributions
+    if payload.contribution_id:
+        return [
+            {
+                "contribution_id": payload.contribution_id,
+                "amount": payload.amount + (payload.fees or 0),
+            }
+        ]
+    return []
+
+
+def _replace_transaction_fundings(db: Session, transaction: Transaction, payload: AccountTransactionCreate) -> None:
+    db.query(TransactionFunding).filter(TransactionFunding.transaction_id == transaction.id).delete()
+    db.add_all(
+        [
+            TransactionFunding(
+                transaction_id=transaction.id,
+                contribution_id=funding.contribution_id if hasattr(funding, "contribution_id") else funding["contribution_id"],
+                amount=funding.amount if hasattr(funding, "amount") else funding["amount"],
+            )
+            for funding in _funding_contributions(payload)
+        ]
+    )
+
+
+def _contribution_usage(db: Session, contribution_id: int, transaction: Transaction | None = None) -> float:
+    funding_usage = select(func.coalesce(func.sum(TransactionFunding.amount), 0)).where(
+        TransactionFunding.contribution_id == contribution_id
+    )
+    legacy_usage = select(func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0)).outerjoin(
+        TransactionFunding, TransactionFunding.transaction_id == Transaction.id
+    ).where(
+        Transaction.contribution_id == contribution_id,
+        Transaction.transaction_type == TransactionType.investment_buy,
+        TransactionFunding.id.is_(None),
+    )
+    if transaction:
+        funding_usage = funding_usage.where(TransactionFunding.transaction_id != transaction.id)
+        legacy_usage = legacy_usage.where(Transaction.id != transaction.id)
+    return float(db.scalar(funding_usage) or 0) + float(db.scalar(legacy_usage) or 0)
+
+
 def _validate_contribution_funding(
     db: Session, payload: AccountTransactionCreate, transaction: Transaction | None = None
 ) -> None:
+    fundings = _funding_contributions(payload)
     if payload.transaction_type != TransactionType.investment_buy:
+        if fundings:
+            raise ValueError("funding contributions are only supported for investment buys")
         return
 
-    contribution = db.get(Transaction, payload.contribution_id)
-    if not contribution or contribution.transaction_type != TransactionType.contribution:
-        raise ValueError("selected contribution was not found")
+    if not fundings:
+        return
+    funding_total = sum(float(funding.amount if hasattr(funding, "amount") else funding["amount"]) for funding in fundings)
+    transaction_total = payload.amount + (payload.fees or 0)
+    if round(funding_total, 2) != round(transaction_total, 2):
+        raise ValueError("funding contributions must total the transaction amount plus fees")
 
-    contribution_account = db.get(Account, contribution.account_id) if contribution.account_id else None
-    if not contribution_account or contribution_account.name.lower() != payload.account_name.lower():
-        raise ValueError("selected contribution belongs to a different account")
+    for funding in fundings:
+        contribution_id = funding.contribution_id if hasattr(funding, "contribution_id") else funding["contribution_id"]
+        amount = float(funding.amount if hasattr(funding, "amount") else funding["amount"])
+        contribution = db.get(Transaction, contribution_id)
+        if not contribution or contribution.transaction_type != TransactionType.contribution:
+            raise ValueError("selected contribution was not found")
 
-    usage = select(func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0)).where(
-        Transaction.contribution_id == contribution.id,
-        Transaction.transaction_type == TransactionType.investment_buy,
-    )
-    if transaction:
-        usage = usage.where(Transaction.id != transaction.id)
-    remaining = float(contribution.amount) - float(db.scalar(usage) or 0)
-    if payload.amount + (payload.fees or 0) > remaining:
-        raise ValueError(f"selected contribution has only ${remaining:.2f} remaining")
+        contribution_account = db.get(Account, contribution.account_id) if contribution.account_id else None
+        if not contribution_account or contribution_account.name.lower() != payload.account_name.lower():
+            raise ValueError("selected contribution belongs to a different account")
+        remaining = float(contribution.amount) - _contribution_usage(db, contribution.id, transaction)
+        if round(amount, 2) > round(remaining, 2):
+            raise ValueError(f"selected contribution has only ${remaining:.2f} remaining")
 
 
-def list_available_contributions(db: Session, account: str, include_contribution_id: int | None = None):
+def list_available_contributions(
+    db: Session,
+    account: str,
+    include_contribution_id: int | None = None,
+    include_contribution_ids: set[int] | None = None,
+):
     contributions = db.execute(
         select(Transaction, Platform.canonical_name)
         .join(Account, Transaction.account_id == Account.id)
@@ -303,28 +362,55 @@ def list_available_contributions(db: Session, account: str, include_contribution
     usage = dict(
         db.execute(
             select(
-                Transaction.contribution_id,
-                func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0),
+                TransactionFunding.contribution_id,
+                func.coalesce(func.sum(TransactionFunding.amount), 0),
             )
-            .where(
-                Transaction.contribution_id.is_not(None),
-                Transaction.transaction_type == TransactionType.investment_buy,
-            )
-            .group_by(Transaction.contribution_id)
+            .group_by(TransactionFunding.contribution_id)
         ).all()
     )
+    legacy_usage = db.execute(
+        select(
+            Transaction.contribution_id,
+            func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0),
+        )
+        .outerjoin(TransactionFunding, TransactionFunding.transaction_id == Transaction.id)
+        .where(
+            Transaction.contribution_id.is_not(None),
+            Transaction.transaction_type == TransactionType.investment_buy,
+            TransactionFunding.id.is_(None),
+        )
+        .group_by(Transaction.contribution_id)
+    ).all()
+    for contribution_id, amount in legacy_usage:
+        usage[contribution_id] = float(usage.get(contribution_id, 0)) + float(amount)
+    include_ids = set(include_contribution_ids or [])
+    if include_contribution_id:
+        include_ids.add(include_contribution_id)
     return [
         {
             "id": contribution.id,
             "transaction_date": contribution.transaction_date,
             "platform_name": platform_name,
             "amount": float(contribution.amount),
-            "remaining_amount": float(contribution.amount) - float(usage.get(contribution.id, 0)),
+            "remaining_amount": round(float(contribution.amount) - float(usage.get(contribution.id, 0)), 2),
         }
         for contribution, platform_name in contributions
-        if float(contribution.amount) - float(usage.get(contribution.id, 0)) > 0
-        or contribution.id == include_contribution_id
+        if round(float(contribution.amount) - float(usage.get(contribution.id, 0)), 2) > 0
+        or contribution.id in include_ids
     ]
+
+
+def list_transaction_fundings(db: Session, transaction: Transaction):
+    fundings = db.scalars(
+        select(TransactionFunding)
+        .where(TransactionFunding.transaction_id == transaction.id)
+        .order_by(TransactionFunding.id)
+    ).all()
+    if fundings:
+        return [{"contribution_id": funding.contribution_id, "amount": float(funding.amount)} for funding in fundings]
+    if transaction.contribution_id:
+        return [{"contribution_id": transaction.contribution_id, "amount": float(transaction.amount) + float(transaction.fees or 0)}]
+    return []
 
 
 def list_transactions(db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None):
@@ -484,15 +570,21 @@ def list_holdings(db: Session, account=None, year=None):
         if txn.transaction_type == TransactionType.dividend_interest:
             cash[cash_key]["book_value"] += float(txn.amount) - float(txn.fees or 0)
             continue
-        if txn.transaction_type not in {TransactionType.investment_buy, TransactionType.investment_sell}:
+        if txn.transaction_type not in {
+            TransactionType.investment_buy,
+            TransactionType.investment_sell,
+            TransactionType.dividend_reinvestment,
+        }:
             continue
 
         amount = float(txn.amount)
         fees = float(txn.fees or 0)
         if txn.transaction_type == TransactionType.investment_buy:
             cash[cash_key]["book_value"] -= amount + fees
-        else:
+        elif txn.transaction_type == TransactionType.investment_sell:
             cash[cash_key]["book_value"] += amount - fees
+        else:
+            cash[cash_key]["book_value"] -= fees
 
         position_key = (account_row.id, platform.id if platform else None, instrument.id if instrument else None)
         position = positions.setdefault(
@@ -512,7 +604,7 @@ def list_holdings(db: Session, account=None, year=None):
             position["broad_category"] = category.broad
             position["precise_category"] = category.precise
 
-        if txn.transaction_type == TransactionType.investment_buy:
+        if txn.transaction_type in {TransactionType.investment_buy, TransactionType.dividend_reinvestment}:
             position["book_value"] += amount + fees
             if txn.quantity is not None:
                 position["quantity"] += txn.quantity
@@ -758,6 +850,15 @@ def export_all_data(db: Session):
             }
             for row in _rows_for_export(db, Transaction)
         ],
+        "transaction_fundings": [
+            {
+                "id": row.id,
+                "transaction_id": row.transaction_id,
+                "contribution_id": row.contribution_id,
+                "amount": row.amount,
+            }
+            for row in _rows_for_export(db, TransactionFunding)
+        ],
         "holding_snapshots": [
             {
                 "id": row.id,
@@ -806,6 +907,7 @@ def restore_all_data(db: Session, payload: dict):
         ImportRow,
         Import,
         HoldingSnapshot,
+        TransactionFunding,
         Transaction,
         ContributionLimit,
         Instrument,
@@ -879,6 +981,16 @@ def restore_all_data(db: Session, payload: dict):
             if row.get("contribution_id") is not None:
                 txn.contribution_id = row.get("contribution_id")
 
+    for row in data.get("transaction_fundings", []):
+        db.add(
+            TransactionFunding(
+                id=row["id"],
+                transaction_id=row["transaction_id"],
+                contribution_id=row["contribution_id"],
+                amount=row["amount"],
+            )
+        )
+
     for row in data.get("holding_snapshots", []):
         db.add(
             HoldingSnapshot(
@@ -920,6 +1032,6 @@ def restore_all_data(db: Session, payload: dict):
 
     db.commit()
 
-    for model in [Account, Platform, PlatformAlias, Category, Instrument, ContributionLimit, Transaction, HoldingSnapshot, Import, ImportRow]:
+    for model in [Account, Platform, PlatformAlias, Category, Instrument, ContributionLimit, Transaction, TransactionFunding, HoldingSnapshot, Import, ImportRow]:
         _reset_sequence(db, model)
     db.commit()
