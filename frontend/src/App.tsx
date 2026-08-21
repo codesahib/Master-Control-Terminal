@@ -7,7 +7,6 @@ import { DistributionChart } from "./components/DistributionChart";
 import { TransactionTable } from "./components/TransactionTable";
 import { AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedTransactions, TimeSeriesPoint, Transaction, TransactionType } from "./types";
 
-const YEAR_OPTIONS = [2023, 2024, 2025, 2026];
 const ACCOUNT_NAMES = ["RRSP", "TFSA", "FHSA"];
 type YearFilter = number | "all";
 type CategoryLevel = "broad" | "precise";
@@ -28,6 +27,7 @@ function App() {
   const [globalYear, setGlobalYear] = useState<YearFilter>(currentYear);
   const [selectedAccount, setSelectedAccount] = useState<string>("RRSP");
   const [accountYear, setAccountYear] = useState<YearFilter>(currentYear);
+  const [years, setYears] = useState<number[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotal, setHistoryTotal] = useState(0);
@@ -67,24 +67,8 @@ function App() {
       return response.data;
     }
 
-    const responses = await Promise.all(YEAR_OPTIONS.map((optionYear) => api.get<ContributionRoom[]>(`/limits/${optionYear}`)));
-    const totals = new Map<string, ContributionRoom>();
-
-    responses.flatMap((response) => response.data).forEach((room) => {
-      const current = totals.get(room.account) || {
-        account: room.account,
-        tax_year: "All",
-        total_room: 0,
-        used: 0,
-        remaining: 0,
-      };
-      current.total_room += room.total_room;
-      current.used += room.used;
-      current.remaining += room.remaining;
-      totals.set(room.account, current);
-    });
-
-    return Array.from(totals.values());
+    const response = await api.get<ContributionRoom[]>("/limits");
+    return response.data;
   }
 
   async function refreshDashboard() {
@@ -276,8 +260,12 @@ function App() {
   }
 
   useEffect(() => {
+    api.get<number[]>("/years").then((response) => setYears(response.data));
+  }, []);
+
+  useEffect(() => {
     refreshDashboard();
-  }, [globalYear, categoryLevel, historyPage, historyType, historyPlatform, historySortDirection]);
+  }, [globalYear, categoryLevel, historyPage, historyType, historyPlatform, historySortDirection, years]);
 
   useEffect(() => {
     if (view === "account") {
@@ -384,7 +372,7 @@ function App() {
             <label>
               Year{" "}
               <select value={accountYear} onChange={(e) => { setAccountYear(e.target.value === "all" ? "all" : Number(e.target.value)); setAccountActivityPage(1); }}>
-                {YEAR_OPTIONS.map((year) => (
+                {years.map((year) => (
                   <option key={year} value={year}>{year}</option>
                 ))}
                 <option value="all">All</option>
@@ -501,7 +489,7 @@ function App() {
           <label>
             Year{" "}
             <select value={globalYear} onChange={(e) => setGlobalYear(e.target.value === "all" ? "all" : Number(e.target.value))}>
-              {YEAR_OPTIONS.map((year) => (
+              {years.map((year) => (
                 <option key={year} value={year}>{year}</option>
               ))}
               <option value="all">All</option>

@@ -23,7 +23,7 @@ from app.models.models import (
 )
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
 
-TRACKED_YEARS = ["2023", "2024", "2025", "2026"]
+TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
 CATEGORY_OPTIONS = {
     "Cash": ["Cash"],
@@ -762,6 +762,24 @@ def get_contribution_room(db: Session, tax_year: int):
                 "total_room": limit["total_room"],
                 "used": used,
                 "remaining": limit["total_room"] - used,
+            }
+        )
+    return result
+
+
+def get_all_contribution_room(db: Session):
+    result = []
+    for account in db.scalars(select(Account)).all():
+        limits = compute_contribution_limits_for_account(db, account)
+        total_room = sum(limit["new_room"] for limit in limits)
+        used = sum(get_contribution_used(db, account.id, int(limit["tax_year"])) for limit in limits)
+        result.append(
+            {
+                "account": account.name,
+                "tax_year": "All",
+                "total_room": total_room,
+                "used": used,
+                "remaining": total_room - used,
             }
         )
     return result

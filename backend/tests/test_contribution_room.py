@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.models import Account, ContributionLimit, Transaction, TransactionType
-from app.services.finance import get_contribution_room, get_contribution_used, list_contribution_limits, list_contributions
+from app.services.finance import get_all_contribution_room, get_contribution_room, get_contribution_used, list_contribution_limits, list_contributions
 
 
 def test_contribution_room_calculation():
@@ -35,7 +35,13 @@ def test_contribution_room_calculation():
         assert room[0]["used"] == 0
         assert room[0]["remaining"] == 12500
 
+        all_room = get_all_contribution_room(db)[0]
+        assert all_room["total_room"] == 14000
+        assert all_room["used"] == 1500
+        assert all_room["remaining"] == 12500
+
         limits = [row for row in list_contribution_limits(db) if row["account"] == "TFSA"]
+        assert [row["tax_year"] for row in limits] == ["2021", "2022", "2023", "2024", "2025", "2026"]
         limit_2026 = next(row for row in limits if row["tax_year"] == "2026")
         assert limit_2026["unused_room"] == 5500
         assert limit_2026["total_room"] == 12500

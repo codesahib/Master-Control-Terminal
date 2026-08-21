@@ -37,6 +37,7 @@ from app.services.finance import (
     create_transaction,
     distribution,
     export_all_data,
+    get_all_contribution_room,
     get_contribution_room,
     list_account_transactions,
     list_available_contributions,
@@ -46,6 +47,7 @@ from app.services.finance import (
     list_transaction_fundings,
     list_transactions,
     restore_all_data,
+    TRACKED_YEARS,
     timeseries,
     upsert_contribution_limit,
     update_account_transaction,
@@ -54,6 +56,11 @@ from app.services.finance import (
 )
 
 router = APIRouter()
+
+
+@router.get("/years", response_model=list[int])
+def list_years():
+    return [int(year) for year in TRACKED_YEARS]
 
 
 def serialize_transaction(txn, db: Session) -> TransactionRead:
@@ -268,6 +275,11 @@ def list_holdings_endpoint(
 @router.get("/limits/{year}", response_model=list[ContributionRoomRead])
 def get_limits(year: int, db: Session = Depends(get_db)):
     return get_contribution_room(db, year)
+
+
+@router.get("/limits", response_model=list[ContributionRoomRead])
+def get_all_limits(db: Session = Depends(get_db)):
+    return get_all_contribution_room(db)
 
 
 @router.get("/contribution-limits", response_model=list[ContributionLimitRead])
