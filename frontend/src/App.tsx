@@ -25,6 +25,7 @@ function App() {
   const currentYear = new Date().getFullYear();
   const [view, setView] = useState<"dashboard" | "account" | "limits">("dashboard");
   const [globalYear, setGlobalYear] = useState<YearFilter>(currentYear);
+  const [globalCurrency, setGlobalCurrency] = useState("CAD");
   const [selectedAccount, setSelectedAccount] = useState<string>("RRSP");
   const [accountYear, setAccountYear] = useState<YearFilter>(currentYear);
   const [years, setYears] = useState<number[]>([]);
@@ -82,11 +83,11 @@ function App() {
     };
     const [tx, sector, account, platform, room, series] = await Promise.all([
       api.get<PaginatedTransactions>("/transactions", { params: historyParams }),
-      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "sector", category_level: categoryLevel, ...params } }),
-      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "account", ...params } }),
-      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "platform", ...params } }),
+      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "sector", category_level: categoryLevel, currency: globalCurrency, ...params } }),
+      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "account", currency: globalCurrency, ...params } }),
+      api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "platform", currency: globalCurrency, ...params } }),
       fetchContributionRooms(globalYear),
-      api.get<TimeSeriesPoint[]>("/analytics/timeseries", { params }),
+      api.get<TimeSeriesPoint[]>("/analytics/timeseries", { params: { ...params, currency: globalCurrency } }),
     ]);
 
     setTransactions(tx.data.items);
@@ -265,7 +266,7 @@ function App() {
 
   useEffect(() => {
     refreshDashboard();
-  }, [globalYear, categoryLevel, historyPage, historyType, historyPlatform, historySortDirection, years]);
+  }, [globalYear, globalCurrency, categoryLevel, historyPage, historyType, historyPlatform, historySortDirection, years]);
 
   useEffect(() => {
     if (view === "account") {
@@ -409,7 +410,7 @@ function App() {
             controls={
               <div className="table-controls">
                 <label>Sort <select value={accountActivitySortDirection} onChange={(e) => { setAccountActivitySortDirection(e.target.value as "asc" | "desc"); setAccountActivityPage(1); }}><option value="desc">Date: newest</option><option value="asc">Date: oldest</option></select></label>
-                <label>Type <select value={accountActivityType} onChange={(e) => { setAccountActivityType(e.target.value as TransactionType | ""); setAccountActivityPage(1); }}><option value="">All</option>{["investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
+                <label>Type <select value={accountActivityType} onChange={(e) => { setAccountActivityType(e.target.value as TransactionType | ""); setAccountActivityPage(1); }}><option value="">All</option>{["investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment", "quantity_adjustment", "currency_exchange"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
                 <label>Platform <input value={accountActivityPlatform} placeholder="All" onChange={(e) => { setAccountActivityPlatform(e.target.value); setAccountActivityPage(1); }} /></label>
               </div>
             }
@@ -426,6 +427,7 @@ function App() {
                   <th>Precise Category</th>
                   <th>Quantity</th>
                   <th>Book Value</th>
+                  <th>Currency</th>
                   <th>As Of</th>
                 </tr>
               </thead>
@@ -437,12 +439,13 @@ function App() {
                     <td>{holding.broad_category || "-"}</td>
                     <td>{holding.precise_category || "-"}</td>
                     <td>{holding.quantity ?? "-"}</td>
-                    <td>${holding.book_value.toFixed(2)}</td>
+                    <td>{holding.book_value.toFixed(2)}</td>
+                    <td>{holding.currency}</td>
                     <td>{holding.as_of_date}</td>
                   </tr>
                 ))}
                 {accountHoldings.length === 0 && (
-                  <tr><td colSpan={7}>No transactions recorded for this account/year.</td></tr>
+                  <tr><td colSpan={8}>No transactions recorded for this account/year.</td></tr>
                 )}
               </tbody>
             </table>
@@ -495,6 +498,7 @@ function App() {
               <option value="all">All</option>
             </select>
           </label>
+          <label>Analytics Currency <select value={globalCurrency} onChange={(e) => setGlobalCurrency(e.target.value)}><option>CAD</option><option>USD</option></select></label>
           <button className="btn btn-secondary" onClick={openImportPicker} disabled={isImporting}>
             {isImporting ? "Importing..." : "Import Backup"}
           </button>
@@ -548,7 +552,7 @@ function App() {
         <DistributionChart title="Platform Distribution" data={platformData} />
 
         <div className="panel chart" style={{ gridColumn: "span 12" }}>
-          <h3>Contributions vs Investments Trend</h3>
+          <h3>Contributions vs Investments Trend ({globalCurrency})</h3>
           <ReactECharts option={timeSeriesOption} style={{ height: 300 }} />
         </div>
 
@@ -558,7 +562,7 @@ function App() {
           controls={
             <div className="table-controls">
               <label>Sort <select value={historySortDirection} onChange={(e) => { setHistorySortDirection(e.target.value as "asc" | "desc"); setHistoryPage(1); }}><option value="desc">Date: newest</option><option value="asc">Date: oldest</option></select></label>
-              <label>Type <select value={historyType} onChange={(e) => { setHistoryType(e.target.value as TransactionType | ""); setHistoryPage(1); }}><option value="">All</option>{["contribution", "investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
+              <label>Type <select value={historyType} onChange={(e) => { setHistoryType(e.target.value as TransactionType | ""); setHistoryPage(1); }}><option value="">All</option>{["contribution", "investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment", "quantity_adjustment", "currency_exchange"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
               <label>Platform <input value={historyPlatform} placeholder="All" onChange={(e) => { setHistoryPlatform(e.target.value); setHistoryPage(1); }} /></label>
             </div>
           }

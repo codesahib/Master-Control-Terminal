@@ -16,8 +16,12 @@ class TransactionCreate(BaseModel):
     broad_category: Optional[str] = None
     precise_category: Optional[str] = None
     amount: float = Field(ge=0)
+    currency: str = Field(default="CAD", pattern="^[A-Z]{3}$")
+    source_amount: Optional[float] = Field(default=None, ge=0)
+    source_currency: Optional[str] = Field(default=None, pattern="^[A-Z]{3}$")
     quantity: Optional[float] = None
     fees: Optional[float] = Field(default=0, ge=0)
+    fee_currency: Optional[str] = Field(default=None, pattern="^[A-Z]{3}$")
     notes: Optional[str] = None
     reversal_of_id: Optional[int] = None
 
@@ -42,6 +46,16 @@ class TransactionCreate(BaseModel):
             self.quantity is None or self.quantity == 0 or self.amount != 0 or self.fees
         ):
             raise ValueError("quantity adjustments require a non-zero quantity and zero amount and fees")
+        if self.transaction_type == TransactionType.currency_exchange and (
+            self.amount <= 0
+            or self.source_amount is None
+            or self.source_amount <= 0
+            or not self.source_currency
+            or self.source_currency == self.currency
+            or self.symbol
+            or self.quantity is not None
+        ):
+            raise ValueError("currency exchanges require different source and destination currencies with positive amounts")
         if self.transaction_type == TransactionType.transfer and not self.notes:
             raise ValueError("notes are required for transfer transactions")
         return self
@@ -52,6 +66,7 @@ class ContributionCreate(BaseModel):
     account_name: Optional[str] = None
     platform_name: Optional[str] = None
     amount: float = Field(ge=0)
+    currency: str = Field(default="CAD", pattern="^[A-Z]{3}$")
     notes: Optional[str] = None
 
 
@@ -77,8 +92,12 @@ class AccountTransactionCreate(BaseModel):
     broad_category: Optional[str] = None
     precise_category: Optional[str] = None
     amount: float = Field(ge=0)
+    currency: str = Field(default="CAD", pattern="^[A-Z]{3}$")
+    source_amount: Optional[float] = Field(default=None, ge=0)
+    source_currency: Optional[str] = Field(default=None, pattern="^[A-Z]{3}$")
     quantity: Optional[float] = None
     fees: Optional[float] = Field(default=0, ge=0)
+    fee_currency: Optional[str] = Field(default=None, pattern="^[A-Z]{3}$")
     notes: Optional[str] = None
     reversal_of_id: Optional[int] = None
     contribution_id: Optional[int] = Field(default=None, gt=0)
@@ -112,6 +131,19 @@ class AccountTransactionCreate(BaseModel):
             or self.funding_cash_sources
         ):
             raise ValueError("quantity adjustments require a symbol, non-zero quantity, and no cash or funding")
+        if self.transaction_type == TransactionType.currency_exchange and (
+            self.amount <= 0
+            or self.source_amount is None
+            or self.source_amount <= 0
+            or not self.source_currency
+            or self.source_currency == self.currency
+            or self.symbol
+            or self.quantity is not None
+            or self.contribution_id
+            or self.funding_contributions
+            or self.funding_cash_sources
+        ):
+            raise ValueError("currency exchanges require different source and destination currencies with positive amounts and no funding")
         return self
 
 
@@ -126,8 +158,12 @@ class TransactionRead(BaseModel):
     broad_category: Optional[str]
     precise_category: Optional[str]
     amount: float
+    currency: str
+    source_amount: Optional[float] = None
+    source_currency: Optional[str] = None
     quantity: Optional[float]
     fees: Optional[float]
+    fee_currency: Optional[str] = None
     notes: Optional[str]
     contribution_id: Optional[int] = None
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
@@ -146,6 +182,7 @@ class ContributionRead(BaseModel):
     account_name: Optional[str]
     platform_name: Optional[str]
     amount: float
+    currency: str
     notes: Optional[str]
 
 
@@ -160,8 +197,12 @@ class AccountTransactionRead(BaseModel):
     broad_category: Optional[str]
     precise_category: Optional[str]
     amount: float
+    currency: str
+    source_amount: Optional[float] = None
+    source_currency: Optional[str] = None
     quantity: Optional[float]
     fees: Optional[float]
+    fee_currency: Optional[str] = None
     notes: Optional[str]
     contribution_id: Optional[int] = None
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
@@ -192,6 +233,7 @@ class HoldingRead(BaseModel):
     record_type: str
     quantity: Optional[float]
     book_value: float
+    currency: str
 
 
 class ContributionRoomRead(BaseModel):

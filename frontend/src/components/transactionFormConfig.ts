@@ -9,6 +9,7 @@ export const accountTransactionOptions: { label: string; value: AccountTransacti
   { label: "Dividend/Interest", value: "dividend_interest" },
   { label: "Dividend Reinvestment", value: "dividend_reinvestment" },
   { label: "Quantity Adjustment", value: "quantity_adjustment" },
+  { label: "Currency Exchange", value: "currency_exchange" },
 ];
 
 export const categoryOptions: Record<string, string[]> = {

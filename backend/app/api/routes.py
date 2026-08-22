@@ -80,8 +80,12 @@ def serialize_transaction(txn, db: Session) -> TransactionRead:
         broad_category=category.broad if category else None,
         precise_category=category.precise if category else None,
         amount=float(txn.amount),
+        currency=txn.currency,
+        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
+        source_currency=txn.source_currency,
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
+        fee_currency=txn.fee_currency,
         notes=txn.notes,
         contribution_id=txn.contribution_id,
         funding_contributions=list_transaction_fundings(db, txn),
@@ -101,8 +105,12 @@ def serialize_transaction_row(row, db: Session) -> TransactionRead:
         broad_category=broad_category,
         precise_category=precise_category,
         amount=float(txn.amount),
+        currency=txn.currency,
+        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
+        source_currency=txn.source_currency,
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
+        fee_currency=txn.fee_currency,
         notes=txn.notes,
         contribution_id=txn.contribution_id,
         funding_contributions=list_transaction_fundings(db, txn),
@@ -117,6 +125,7 @@ def serialize_contribution_row(row) -> ContributionRead:
         account_name=account_name,
         platform_name=platform_name,
         amount=float(txn.amount),
+        currency=txn.currency,
         notes=txn.notes,
     )
 
@@ -134,8 +143,12 @@ def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRea
         broad_category=broad_category,
         precise_category=precise_category,
         amount=float(txn.amount),
+        currency=txn.currency,
+        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
+        source_currency=txn.source_currency,
         quantity=txn.quantity,
         fees=float(txn.fees or 0),
+        fee_currency=txn.fee_currency,
         notes=txn.notes,
         contribution_id=txn.contribution_id,
         funding_contributions=list_transaction_fundings(db, txn),
@@ -182,6 +195,7 @@ def create_contribution_endpoint(payload: ContributionCreate, db: Session = Depe
         account_name=db.get(Account, txn.account_id).name if txn.account_id else None,
         platform_name=db.get(Platform, txn.platform_id).canonical_name if txn.platform_id else None,
         amount=float(txn.amount),
+        currency=txn.currency,
         notes=txn.notes,
     )
 
@@ -197,6 +211,7 @@ def update_contribution_endpoint(transaction_id: int, payload: ContributionCreat
         account_name=db.get(Account, txn.account_id).name if txn.account_id else None,
         platform_name=db.get(Platform, txn.platform_id).canonical_name if txn.platform_id else None,
         amount=float(txn.amount),
+        currency=txn.currency,
         notes=txn.notes,
     )
 
@@ -309,14 +324,19 @@ def get_distribution(
     group_by: str = Query(pattern="^(sector|account|platform)$"),
     year: int | None = Query(default=None),
     category_level: str = Query(default="precise", pattern="^(broad|precise)$"),
+    currency: str = Query(default="CAD", pattern="^[A-Z]{3}$"),
     db: Session = Depends(get_db),
 ):
-    return distribution(db, group_by, year, category_level)
+    return distribution(db, group_by, year, category_level, currency)
 
 
 @router.get("/analytics/timeseries", response_model=list[TimeSeriesPoint])
-def get_timeseries(year: int | None = Query(default=None), db: Session = Depends(get_db)):
-    return timeseries(db, year)
+def get_timeseries(
+    year: int | None = Query(default=None),
+    currency: str = Query(default="CAD", pattern="^[A-Z]{3}$"),
+    db: Session = Depends(get_db),
+):
+    return timeseries(db, year, currency)
 
 
 @router.get("/export")

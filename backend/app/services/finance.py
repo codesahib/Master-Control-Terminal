@@ -218,6 +218,10 @@ def _save_transaction(
     precise_category = getattr(payload, "precise_category", None)
     quantity = getattr(payload, "quantity", None)
     fees = getattr(payload, "fees", 0)
+    currency = getattr(payload, "currency", "CAD")
+    source_amount = getattr(payload, "source_amount", None)
+    source_currency = getattr(payload, "source_currency", None)
+    fee_currency = getattr(payload, "fee_currency", None)
     reversal_of_id = getattr(payload, "reversal_of_id", None)
     contribution_id = getattr(payload, "contribution_id", None)
     resolved_type = transaction_type or getattr(payload, "transaction_type")
@@ -236,8 +240,12 @@ def _save_transaction(
     txn.instrument_id = instrument.id if instrument else None
     txn.category_id = category.id if category else None
     txn.amount = payload.amount
+    txn.currency = currency
+    txn.source_amount = source_amount
+    txn.source_currency = source_currency
     txn.quantity = quantity
     txn.fees = fees
+    txn.fee_currency = fee_currency
     txn.notes = payload.notes
     txn.reversal_of_id = reversal_of_id
     txn.contribution_id = contribution_id
@@ -628,39 +636,48 @@ def list_holdings(db: Session, account=None, year=None):
 
     cash = {}
     positions = {}
-    for txn, account_row, platform, source_platform_row, instrument, category in db.execute(q):
-        if not account_row:
-            continue
 
-        cash_key = (account_row.id, platform.id if platform else None)
-        cash.setdefault(
+    def cash_row(account_row, platform, currency):
+        cash_key = (account_row.id, platform.id if platform else None, currency)
+        return cash.setdefault(
             cash_key,
             {
                 "account_name": account_row.name,
                 "platform_name": platform.canonical_name if platform else None,
+                "currency": currency,
                 "book_value": 0.0,
             },
         )
 
+    def adjust_cash(account_row, platform, currency, amount):
+        cash_row(account_row, platform, currency)["book_value"] += amount
+
+    for txn, account_row, platform, source_platform_row, instrument, category in db.execute(q):
+        if not account_row:
+            continue
+
+        currency = txn.currency or "CAD"
+        cash_row(account_row, platform, currency)
+        fee_currency = txn.fee_currency or currency
+        fees = float(txn.fees or 0)
+
         if txn.transaction_type == TransactionType.contribution:
-            cash[cash_key]["book_value"] += float(txn.amount)
+            adjust_cash(account_row, platform, currency, float(txn.amount))
             continue
         if txn.transaction_type == TransactionType.dividend_interest:
-            cash[cash_key]["book_value"] += float(txn.amount) - float(txn.fees or 0)
+            adjust_cash(account_row, platform, currency, float(txn.amount))
+            adjust_cash(account_row, platform, fee_currency, -fees)
             continue
         if txn.transaction_type == TransactionType.transfer:
             if source_platform_row:
-                source_cash_key = (account_row.id, source_platform_row.id)
-                cash.setdefault(
-                    source_cash_key,
-                    {
-                        "account_name": account_row.name,
-                        "platform_name": source_platform_row.canonical_name,
-                        "book_value": 0.0,
-                    },
-                )
-                cash[source_cash_key]["book_value"] -= float(txn.amount) + float(txn.fees or 0)
-                cash[cash_key]["book_value"] += float(txn.amount)
+                adjust_cash(account_row, source_platform_row, currency, -float(txn.amount))
+                adjust_cash(account_row, source_platform_row, fee_currency, -fees)
+                adjust_cash(account_row, platform, currency, float(txn.amount))
+            continue
+        if txn.transaction_type == TransactionType.currency_exchange:
+            adjust_cash(account_row, platform, txn.source_currency or "CAD", -float(txn.source_amount or 0))
+            adjust_cash(account_row, platform, fee_currency, -fees)
+            adjust_cash(account_row, platform, currency, float(txn.amount))
             continue
         if txn.transaction_type not in {
             TransactionType.investment_buy,
@@ -671,20 +688,19 @@ def list_holdings(db: Session, account=None, year=None):
             continue
 
         amount = float(txn.amount)
-        fees = float(txn.fees or 0)
         if txn.transaction_type == TransactionType.investment_buy:
-            cash[cash_key]["book_value"] -= amount + fees
+            adjust_cash(account_row, platform, currency, -amount)
         elif txn.transaction_type == TransactionType.investment_sell:
-            cash[cash_key]["book_value"] += amount - fees
-        else:
-            cash[cash_key]["book_value"] -= fees
+            adjust_cash(account_row, platform, currency, amount)
+        adjust_cash(account_row, platform, fee_currency, -fees)
 
-        position_key = (account_row.id, platform.id if platform else None, instrument.id if instrument else None)
+        position_key = (account_row.id, platform.id if platform else None, instrument.id if instrument else None, currency)
         position = positions.setdefault(
             position_key,
             {
                 "account_name": account_row.name,
                 "platform_name": platform.canonical_name if platform else None,
+                "currency": currency,
                 "symbol": instrument.symbol if instrument else "Unspecified",
                 "broad_category": None,
                 "precise_category": None,
@@ -718,12 +734,12 @@ def list_holdings(db: Session, account=None, year=None):
             position["book_value"] -= amount
 
     holdings = []
-    for (account_id, platform_id), row in cash.items():
+    for (account_id, platform_id, currency), row in cash.items():
         book_value = round(row["book_value"], 2)
         if book_value:
             holdings.append(
                 {
-                    "id": f"cash:{account_id}:{platform_id or 0}",
+                    "id": f"cash:{account_id}:{platform_id or 0}:{currency}",
                     "as_of_date": as_of_date,
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
@@ -733,13 +749,14 @@ def list_holdings(db: Session, account=None, year=None):
                     "record_type": "cash",
                     "quantity": None,
                     "book_value": book_value,
+                    "currency": row["currency"],
                 }
             )
-    for (account_id, platform_id, instrument_id), row in positions.items():
+    for (account_id, platform_id, instrument_id, currency), row in positions.items():
         if row["quantity"] or row["book_value"]:
             holdings.append(
                 {
-                    "id": f"holding:{account_id}:{platform_id or 0}:{instrument_id or 0}",
+                    "id": f"holding:{account_id}:{platform_id or 0}:{instrument_id or 0}:{currency}",
                     "as_of_date": as_of_date,
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
@@ -749,9 +766,10 @@ def list_holdings(db: Session, account=None, year=None):
                     "record_type": "holding",
                     "quantity": row["quantity"] if row["has_quantity"] else None,
                     "book_value": row["book_value"],
+                    "currency": row["currency"],
                 }
             )
-    return sorted(holdings, key=lambda row: (row["account_name"], row["record_type"], row["symbol"]))
+    return sorted(holdings, key=lambda row: (row["account_name"], row["record_type"], row["symbol"], row["currency"]))
 
 
 def get_contribution_room(db: Session, tax_year: int):
@@ -870,9 +888,11 @@ def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new
     return compute_contribution_limit_for_account(db, account, tax_year)
 
 
-def distribution(db: Session, group_by: str, year: int | None = None, category_level: str = "precise"):
+def distribution(db: Session, group_by: str, year: int | None = None, category_level: str = "precise", currency: str = "CAD"):
     totals = {}
     for holding in list_holdings(db, year=year):
+        if holding["currency"] != currency:
+            continue
         if group_by == "sector":
             label = holding["broad_category"] if category_level == "broad" else holding["precise_category"]
         elif group_by == "account":
@@ -884,7 +904,7 @@ def distribution(db: Session, group_by: str, year: int | None = None, category_l
     return [{"label": label, "value": value} for label, value in sorted(totals.items())]
 
 
-def timeseries(db: Session, year: int | None = None):
+def timeseries(db: Session, year: int | None = None, currency: str = "CAD"):
     q = (
         select(
             func.to_char(Transaction.transaction_date, "YYYY-MM").label("month"),
@@ -904,6 +924,7 @@ def timeseries(db: Session, year: int | None = None):
     )
     if year:
         q = q.where(func.extract("year", Transaction.transaction_date) == year)
+    q = q.where(Transaction.currency == currency)
     rows = db.execute(q).all()
     return [{"month": r.month, "contributions": float(r.contributions or 0), "investments": float(r.investments or 0)} for r in rows]
 

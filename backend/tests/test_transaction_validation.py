@@ -42,6 +42,34 @@ def test_quantity_adjustment_requires_non_zero_quantity_and_zero_cash():
         )
 
 
+def test_currency_exchange_requires_two_positive_different_currency_amounts():
+    txn = AccountTransactionCreate(
+        transaction_type=TransactionType.currency_exchange,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Questrade",
+        amount=793.26,
+        currency="USD",
+        source_amount=1084.98,
+        source_currency="CAD",
+        fees=11.24,
+        fee_currency="CAD",
+    )
+    assert txn.source_currency == "CAD"
+
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.currency_exchange,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Questrade",
+            amount=793.26,
+            currency="USD",
+            source_amount=1084.98,
+            source_currency="USD",
+        )
+
+
 def test_transfer_requires_notes():
     with pytest.raises(ValueError):
         TransactionCreate(

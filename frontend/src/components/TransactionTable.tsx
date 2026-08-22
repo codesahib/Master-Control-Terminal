@@ -52,6 +52,7 @@ export function TransactionTable<T extends ActivityRecord>({
       }
 
       baseColumns.push({ header: "Amount", accessorKey: "amount" });
+      baseColumns.push({ header: "Currency", accessorKey: "currency" });
 
       if (isTransactionTable || variant === "all") {
         baseColumns.push({ header: "Fees", accessorKey: "fees" });

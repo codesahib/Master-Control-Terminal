@@ -15,6 +15,7 @@ class TransactionType(str, enum.Enum):
     dividend_interest = "dividend_interest"
     dividend_reinvestment = "dividend_reinvestment"
     quantity_adjustment = "quantity_adjustment"
+    currency_exchange = "currency_exchange"
 
 
 class ImportType(str, enum.Enum):
@@ -88,8 +89,12 @@ class Transaction(Base):
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="CAD")
+    source_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    source_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
     fees: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    fee_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reversal_of_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
     contribution_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True, index=True)

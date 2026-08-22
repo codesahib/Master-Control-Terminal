@@ -5,7 +5,8 @@ export type TransactionType =
   | "transfer"
   | "dividend_interest"
   | "dividend_reinvestment"
-  | "quantity_adjustment";
+  | "quantity_adjustment"
+  | "currency_exchange";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 
@@ -15,6 +16,7 @@ export interface ActivityRecord {
   account_name?: string;
   platform_name?: string;
   amount: number;
+  currency: string;
   notes?: string;
 }
 
@@ -28,6 +30,9 @@ export interface AccountTransaction extends ActivityRecord {
   precise_category?: string;
   quantity?: number;
   fees?: number;
+  fee_currency?: string;
+  source_amount?: number;
+  source_currency?: string;
   contribution_id?: number;
   funding_contributions?: FundingContribution[];
 }
@@ -61,6 +66,7 @@ export interface Holding {
   record_type: "holding" | "cash" | "unused" | string;
   quantity?: number;
   book_value: number;
+  currency: string;
 }
 
 export type Transaction = Omit<AccountTransaction, "transaction_type"> & {
