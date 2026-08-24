@@ -1,11 +1,12 @@
 from datetime import date
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.models import Account, Category, HoldingSnapshot, Instrument, MarketPrice, Platform, Transaction, TransactionType
-from app.services.finance import distribution, grouped_holdings, portfolio_pl, list_holdings
+from app.services.finance import create_account_transaction, distribution, grouped_holdings, portfolio_pl, list_holdings
+from app.schemas.schemas import AccountTransactionCreate
 
 
 def test_holdings_are_derived_from_transactions_not_snapshots():
@@ -292,6 +293,35 @@ def test_portfolio_pl_uses_manual_snapshot_for_holdings_without_quantity():
         assert row["market_value"] == 3043.89
         assert row["unrealized_pl"] == 43.89
         assert row["manual_valuation_date"] == date(2026, 8, 24)
+
+
+def test_custom_symbol_stays_manual():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        create_account_transaction(
+            db,
+            AccountTransactionCreate(
+                transaction_type=TransactionType.investment_buy,
+                transaction_date=date(2026, 1, 1),
+                account_name="RRSP",
+                platform_name="Wealthsimple",
+                symbol="WS-income portfolio",
+                instrument_name="WS-income portfolio",
+                is_custom_symbol=True,
+                amount=12000,
+                currency="CAD",
+            ),
+        )
+
+        instrument = db.scalar(select(Instrument))
+
+        assert instrument.symbol == "WS-income portfolio"
+        assert instrument.provider_symbol is None
+        assert instrument.provider is None
+        assert instrument.is_active is False
 
 
 def test_holdings_and_pl_group_symbol_with_platform_children():

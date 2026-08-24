@@ -143,3 +143,15 @@ export interface PortfolioPLRow extends Holding {
   manual_valuation_date?: string;
   children?: PortfolioPLRow[];
 }
+
+export interface ManualValuationPayload {
+  account_name: string;
+  platform_name?: string;
+  instrument_id?: number;
+  symbol?: string;
+  instrument_name?: string;
+  broad_category?: string;
+  precise_category?: string;
+  market_value: number;
+  snapshot_date: string;
+}

@@ -176,12 +176,29 @@ def get_or_create_instrument(db: Session, symbol: str | None, name: str | None =
     normalized = symbol.strip().upper()
     inst = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == normalized.lower()))
     if inst:
-        if not inst.provider_symbol:
-            inst.provider_symbol = normalized
-            inst.provider = "yfinance"
         return inst
     inst = Instrument(symbol=normalized, name=name, provider_symbol=normalized, provider="yfinance")
     db.add(inst)
+    db.commit()
+    db.refresh(inst)
+    return inst
+
+
+def get_or_create_custom_instrument(db: Session, symbol: str | None, name: str | None = None) -> Instrument | None:
+    if not symbol:
+        return None
+    value = symbol.strip()
+    inst = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == value.lower()))
+    if not inst:
+        inst = Instrument(symbol=value, name=name or value)
+        db.add(inst)
+    inst.name = name or inst.name or value
+    inst.provider_symbol = None
+    inst.exchange = None
+    inst.currency = None
+    inst.asset_type = "manual"
+    inst.provider = None
+    inst.is_active = False
     db.commit()
     db.refresh(inst)
     return inst
@@ -198,7 +215,39 @@ def resolve_instrument(db: Session, payload: TransactionCreate | AccountTransact
     instrument_name = getattr(payload, "instrument_name", None)
     if not symbol:
         return None
+    if getattr(payload, "is_custom_symbol", False):
+        return get_or_create_custom_instrument(db, symbol, instrument_name)
     return get_or_create_instrument(db, symbol, instrument_name)
+
+
+def upsert_manual_valuation(db: Session, payload) -> HoldingSnapshot:
+    account = get_or_create_account(db, payload.account_name)
+    platform = normalize_platform(db, payload.platform_name)
+    instrument = resolve_instrument(db, payload)
+    category = get_or_create_category(db, payload.broad_category, payload.precise_category)
+    snapshot = db.scalar(
+        select(HoldingSnapshot)
+        .where(
+            HoldingSnapshot.account_id == (account.id if account else None),
+            HoldingSnapshot.platform_id == (platform.id if platform else None),
+            HoldingSnapshot.instrument_id == (instrument.id if instrument else None),
+            HoldingSnapshot.category_id == (category.id if category else None),
+            HoldingSnapshot.record_type == "holding",
+        )
+        .order_by(HoldingSnapshot.snapshot_date.desc(), HoldingSnapshot.id.desc())
+    )
+    if not snapshot:
+        snapshot = HoldingSnapshot(record_type="holding")
+        db.add(snapshot)
+    snapshot.snapshot_date = payload.snapshot_date
+    snapshot.account_id = account.id if account else None
+    snapshot.platform_id = platform.id if platform else None
+    snapshot.instrument_id = instrument.id if instrument else None
+    snapshot.category_id = category.id if category else None
+    snapshot.market_value = payload.market_value
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot
 
 
 def get_or_create_category(db: Session, broad: str | None, precise: str | None) -> Category | None:
@@ -338,7 +387,7 @@ def _funding_contributions(
         return [
             {
                 "contribution_id": payload.contribution_id,
-                "amount": payload.amount + (payload.fees or 0),
+                "amount": (payload.source_amount if payload.source_amount is not None else payload.amount) + (payload.fees or 0),
             }
         ]
     return []
@@ -393,7 +442,7 @@ def _validate_contribution_funding(
     if not fundings:
         return
     funding_total = sum(float(funding.amount if hasattr(funding, "amount") else funding["amount"]) for funding in fundings)
-    transaction_total = payload.amount + (payload.fees or 0)
+    transaction_total = (payload.source_amount if payload.source_amount is not None else payload.amount) + (payload.fees or 0)
     if round(funding_total, 2) != round(transaction_total, 2):
         raise ValueError("funding contributions must total the transaction amount plus fees")
 

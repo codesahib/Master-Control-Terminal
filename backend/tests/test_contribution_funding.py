@@ -141,6 +141,40 @@ def test_investment_buy_can_use_multiple_or_no_funding_contributions():
             )
 
 
+def test_cross_currency_buy_funding_uses_source_amount():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        db.add_all([Account(name="TFSA"), Platform(canonical_name="Wealthsimple")])
+        db.commit()
+        contribution = create_contribution(
+            db,
+            ContributionCreate(
+                transaction_date=date(2026, 1, 1), account_name="TFSA", platform_name="Wealthsimple", amount=121.37
+            ),
+        )
+        create_account_transaction(
+            db,
+            AccountTransactionCreate(
+                transaction_type=TransactionType.investment_buy,
+                transaction_date=date(2026, 1, 2),
+                account_name="TFSA",
+                platform_name="Wealthsimple",
+                symbol="GOOG",
+                amount=88.2242,
+                currency="USD",
+                source_amount=121.37,
+                source_currency="CAD",
+                quantity=1,
+                funding_contributions=[{"contribution_id": contribution.id, "amount": 121.37}],
+            ),
+        )
+
+        assert list_available_contributions(db, "TFSA") == []
+
+
 def test_transfer_replaces_source_lots_with_destination_cash():
     engine = create_engine("sqlite:///:memory:", future=True)
     Session = sessionmaker(bind=engine, future=True)

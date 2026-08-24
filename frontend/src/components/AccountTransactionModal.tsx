@@ -39,6 +39,7 @@ export function AccountTransactionModal({
     instrument_id: transaction?.instrument_id || undefined,
     symbol: transaction?.symbol || "",
     instrument_name: "",
+    is_custom_symbol: false,
     amount: String(transaction?.amount ?? 0),
     currency: transaction?.currency || "CAD",
     source_amount: transaction?.source_amount ? String(transaction.source_amount) : "",
@@ -75,6 +76,7 @@ export function AccountTransactionModal({
   );
   const requiresFunding = ["investment_buy", "transfer"].includes(transactionType);
   const isCurrencyExchange = transactionType === "currency_exchange";
+  const supportsSourceCash = ["investment_buy", "dividend_reinvestment"].includes(transactionType);
 
   useEffect(() => {
     if (!transaction && defaultPlatform) {
@@ -93,7 +95,7 @@ export function AccountTransactionModal({
   }, [form.account_name, requiresFunding]);
 
   useEffect(() => {
-    if (!requiresSymbol || symbolQuery.trim().length < 2) {
+    if (!requiresSymbol || form.is_custom_symbol || symbolQuery.trim().length < 2) {
       setSymbolResults([]);
       return;
     }
@@ -106,7 +108,7 @@ export function AccountTransactionModal({
         .finally(() => setIsSearchingSymbols(false));
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [requiresSymbol, symbolQuery]);
+  }, [requiresSymbol, symbolQuery, form.is_custom_symbol]);
 
   function selectSymbol(symbol: SymbolSearchResult) {
     setForm({
@@ -137,7 +139,7 @@ export function AccountTransactionModal({
   }
 
   function useRemainingAmount(contribution: ContributionFunding) {
-    const total = Number(form.amount || 0) + Number(form.fees || 0);
+    const total = Number((supportsSourceCash && form.source_amount) || form.amount || 0) + Number(form.fees || 0);
     const allocatedElsewhere = fundingCashSources
       .filter((funding) => funding.platform_name !== contribution.platform_name)
       .reduce((sum, funding) => sum + funding.amount, 0);
@@ -176,12 +178,13 @@ export function AccountTransactionModal({
         instrument_name: form.instrument_name || null,
         amount: Number(form.amount),
         currency: form.currency,
-        source_amount: isCurrencyExchange && form.source_amount ? Number(form.source_amount) : null,
-        source_currency: isCurrencyExchange ? form.source_currency : null,
+        source_amount: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? Number(form.source_amount) : null,
+        source_currency: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? form.source_currency : null,
         quantity: requiresSymbol && form.quantity ? Number(form.quantity) : null,
         fees: Number(form.fees || 0),
         fee_currency: form.fee_currency || form.currency,
         notes: form.notes || null,
+        is_custom_symbol: requiresSymbol ? form.is_custom_symbol : false,
         funding_cash_sources: requiresFunding ? fundingCashSources : [],
       };
 
@@ -222,7 +225,7 @@ export function AccountTransactionModal({
 
           <div className="form-grid">
             <div className="field"><label htmlFor="account-transaction-date">Date</label><input id="account-transaction-date" type="date" required value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
-            <div className="field"><label htmlFor="account-transaction-amount">{isCurrencyExchange ? "To Amount" : "Amount"}</label><input id="account-transaction-amount" type="number" min="0.01" step="0.01" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
+            <div className="field"><label htmlFor="account-transaction-amount">{isCurrencyExchange ? "To Amount" : "Amount"}</label><input id="account-transaction-amount" type="number" min={transactionType === "investment_buy" ? "0" : "0.000001"} step="0.000001" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
             <div className="field"><label htmlFor="account-transaction-currency">{isCurrencyExchange ? "To Currency" : "Currency"}</label><select id="account-transaction-currency" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
             <div className="field"><label htmlFor="account-transaction-account">Account</label><select id="account-transaction-account" required value={form.account_name} onChange={(e) => { setForm({ ...form, account_name: e.target.value }); setFundingCashSources([]); }}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
             <div className="field">
@@ -238,6 +241,10 @@ export function AccountTransactionModal({
             {isCurrencyExchange && <>
               <div className="field"><label htmlFor="account-transaction-source-amount">From Amount</label><input id="account-transaction-source-amount" type="number" min="0.01" step="0.01" inputMode="decimal" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
               <div className="field"><label htmlFor="account-transaction-source-currency">From Currency</label><select id="account-transaction-source-currency" value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
+            </>}
+            {supportsSourceCash && <>
+              <div className="field"><label htmlFor="account-transaction-source-amount">Cash Used (optional)</label><input id="account-transaction-source-amount" type="number" min="0.000001" step="0.000001" inputMode="decimal" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
+              <div className="field"><label htmlFor="account-transaction-source-currency">Cash Currency</label><select id="account-transaction-source-currency" value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
             </>}
             {requiresFunding && (
               <div className="field field-span">
@@ -299,8 +306,12 @@ export function AccountTransactionModal({
                   setForm({ ...form, instrument_id: undefined, symbol: e.target.value });
                 }}
               />
+              <label className="inline-check">
+                <input type="checkbox" checked={form.is_custom_symbol} onChange={(e) => setForm({ ...form, is_custom_symbol: e.target.checked })} />
+                Manual/custom symbol
+              </label>
               {isSearchingSymbols && <small>Searching symbols...</small>}
-              {symbolResults.length > 0 && (
+              {!form.is_custom_symbol && symbolResults.length > 0 && (
                 <div className="symbol-results">
                   {symbolResults.map((symbol) => (
                     <button className="symbol-result" type="button" key={symbol.id} onClick={() => selectSymbol(symbol)}>
@@ -312,8 +323,8 @@ export function AccountTransactionModal({
                 </div>
               )}
             </div>}
-            {requiresSymbol && <div className="field"><label htmlFor="account-transaction-quantity">Quantity</label><input id="account-transaction-quantity" type="number" min="0" step="0.0001" inputMode="decimal" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>}
-            <div className="field"><label htmlFor="account-transaction-fees">Fees</label><input id="account-transaction-fees" type="number" min="0" step="0.01" inputMode="decimal" value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} /></div>
+            {requiresSymbol && <div className="field"><label htmlFor="account-transaction-quantity">Quantity</label><input id="account-transaction-quantity" type="number" min="0" step="0.000001" inputMode="decimal" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>}
+            <div className="field"><label htmlFor="account-transaction-fees">Fees</label><input id="account-transaction-fees" type="number" min="0" step="0.000001" inputMode="decimal" value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} /></div>
             <div className="field"><label htmlFor="account-transaction-fee-currency">Fee Currency</label><select id="account-transaction-fee-currency" value={form.fee_currency} onChange={(e) => setForm({ ...form, fee_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
             {!isCurrencyExchange && <div className="field"><label htmlFor="account-transaction-instrument-name">Instrument Name</label><input id="account-transaction-instrument-name" value={form.instrument_name} onChange={(e) => setForm({ ...form, instrument_name: e.target.value })} /></div>}
             <div className="field field-span"><label htmlFor="account-transaction-notes">Notes</label><textarea id="account-transaction-notes" value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>

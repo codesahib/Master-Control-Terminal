@@ -27,6 +27,7 @@ from app.schemas.schemas import (
     ImportPreviewResponse,
     ImportPreviewRow,
     MarketPriceRefreshResult,
+    ManualValuationUpsert,
     PaginatedTransactionRead,
     PaginatedPortfolioPLRead,
     SymbolRead,
@@ -54,6 +55,7 @@ from app.services.finance import (
     restore_all_data,
     TRACKED_YEARS,
     timeseries,
+    upsert_manual_valuation,
     upsert_contribution_limit,
     update_account_transaction,
     update_contribution,
@@ -86,6 +88,20 @@ def search_symbols_endpoint(
 @router.post("/market-prices/refresh", response_model=list[MarketPriceRefreshResult])
 def refresh_market_prices_endpoint(db: Session = Depends(get_db)):
     return refresh_market_prices(db)
+
+
+@router.post("/manual-valuations")
+def upsert_manual_valuation_endpoint(payload: ManualValuationUpsert, db: Session = Depends(get_db)):
+    try:
+        snapshot = upsert_manual_valuation(db, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "id": snapshot.id,
+        "snapshot_date": snapshot.snapshot_date,
+        "market_value": float(snapshot.market_value),
+    }
 
 
 @router.get("/portfolio/pl", response_model=PaginatedPortfolioPLRead)

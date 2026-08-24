@@ -4,6 +4,7 @@ import { api, isApiLoading, subscribeToApiLoading } from "./api/client";
 import { AccountTransactionModal } from "./components/AccountTransactionModal";
 import { ContributionModal } from "./components/ContributionModal";
 import { DistributionChart } from "./components/DistributionChart";
+import { ManualValuationModal } from "./components/ManualValuationModal";
 import { TransactionTable } from "./components/TransactionTable";
 import { AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedPortfolioPL, PaginatedTransactions, PortfolioPLRow, Transaction, TransactionType } from "./types";
 
@@ -11,7 +12,7 @@ const ACCOUNT_NAMES = ["RRSP", "TFSA", "FHSA"];
 const PRICE_STATUSES = ["ok", "stale", "missing", "missing_quantity", "currency_mismatch", "cash"];
 type YearFilter = number | "all";
 type CategoryLevel = "broad" | "precise";
-type ActiveModal = "contribution" | "account-transaction" | null;
+type ActiveModal = "contribution" | "account-transaction" | "manual-valuation" | null;
 
 function yearParams(year: YearFilter) {
   return year === "all" ? {} : { year };
@@ -48,6 +49,7 @@ function App() {
   const [expandedHoldings, setExpandedHoldings] = useState<string[]>([]);
   const [editingContribution, setEditingContribution] = useState<Contribution | undefined>();
   const [editingAccountTransaction, setEditingAccountTransaction] = useState<AccountTransaction | undefined>();
+  const [manualValuationRow, setManualValuationRow] = useState<PortfolioPLRow | undefined>();
   const [modalAccount, setModalAccount] = useState<string | undefined>();
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [sectorData, setSectorData] = useState<DistributionPoint[]>([]);
@@ -233,6 +235,13 @@ function App() {
     setActiveModal("account-transaction");
   }
 
+  function openManualValuation(row: PortfolioPLRow) {
+    setEditingContribution(undefined);
+    setEditingAccountTransaction(undefined);
+    setManualValuationRow(row);
+    setActiveModal("manual-valuation");
+  }
+
   function toggleExpanded(id: string, setExpanded: (updater: (current: string[]) => string[]) => void) {
     setExpanded((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   }
@@ -411,6 +420,17 @@ function App() {
       Loading…
     </div>
   );
+  function renderPLStatus(row: PortfolioPLRow) {
+    return (
+      <>
+        {row.price_status}
+        {row.manual_valuation_date && <><br /><small>Manual value updated {row.manual_valuation_date}</small></>}
+        {row.record_type === "holding" && row.quantity == null && (
+          <><br /><button className="btn btn-secondary table-action" type="button" onClick={() => openManualValuation(row)}>Update value</button></>
+        )}
+      </>
+    );
+  }
 
   if (view === "limits") {
     return (
@@ -793,10 +813,7 @@ function App() {
                     <td data-label="Market">{row.market_value ? `${row.market_value.toFixed(2)} ${row.currency}` : "-"}</td>
                     <td data-label="P/L" className={(row.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{row.unrealized_pl !== undefined && row.unrealized_pl !== null ? row.unrealized_pl.toFixed(2) : "-"}</td>
                     <td data-label="P/L %">{row.unrealized_pl_pct !== undefined && row.unrealized_pl_pct !== null ? `${row.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
-                    <td data-label="Status">
-                      {row.price_status}
-                      {row.manual_valuation_date && <><br /><small>Manual value updated {row.manual_valuation_date}</small></>}
-                    </td>
+                    <td data-label="Status">{renderPLStatus(row)}</td>
                   </tr>,
                   ...(canExpand && isExpanded ? childRows.map((child) => (
                     <tr key={child.id} className="sub-row">
@@ -809,10 +826,7 @@ function App() {
                       <td data-label="Market">{child.market_value ? `${child.market_value.toFixed(2)} ${child.currency}` : "-"}</td>
                       <td data-label="P/L" className={(child.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{child.unrealized_pl !== undefined && child.unrealized_pl !== null ? child.unrealized_pl.toFixed(2) : "-"}</td>
                       <td data-label="P/L %">{child.unrealized_pl_pct !== undefined && child.unrealized_pl_pct !== null ? `${child.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
-                      <td data-label="Status">
-                        {child.price_status}
-                        {child.manual_valuation_date && <><br /><small>Manual value updated {child.manual_valuation_date}</small></>}
-                      </td>
+                      <td data-label="Status">{renderPLStatus(child)}</td>
                     </tr>
                   )) : []),
                 ];
@@ -885,6 +899,13 @@ function App() {
           pagination={{ page: historyPage, pageSize: 10, total: historyTotal, onPageChange: setHistoryPage }}
         />
       </div>
+      {activeModal === "manual-valuation" && manualValuationRow && (
+        <ManualValuationModal
+          row={manualValuationRow}
+          onClose={() => setActiveModal(null)}
+          onSaved={refreshAfterSave}
+        />
+      )}
 
       {activeModal === "contribution" && (
         <ContributionModal

@@ -14,6 +14,7 @@ class TransactionCreate(BaseModel):
     instrument_id: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
+    is_custom_symbol: bool = False
     broad_category: Optional[str] = None
     precise_category: Optional[str] = None
     amount: float = Field(ge=0)
@@ -92,6 +93,7 @@ class AccountTransactionCreate(BaseModel):
     instrument_id: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
+    is_custom_symbol: bool = False
     broad_category: Optional[str] = None
     precise_category: Optional[str] = None
     amount: float = Field(ge=0)
@@ -286,6 +288,18 @@ class SymbolRead(BaseModel):
     currency: Optional[str] = None
     asset_type: Optional[str] = None
     provider: str
+
+
+class ManualValuationUpsert(BaseModel):
+    account_name: str = Field(min_length=1)
+    platform_name: Optional[str] = None
+    instrument_id: Optional[int] = Field(default=None, gt=0)
+    symbol: Optional[str] = None
+    instrument_name: Optional[str] = None
+    broad_category: Optional[str] = None
+    precise_category: Optional[str] = None
+    market_value: float = Field(ge=0)
+    snapshot_date: date
 
 
 class MarketPriceRefreshResult(BaseModel):
