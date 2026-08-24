@@ -14,6 +14,7 @@ interface Props {
   defaultAccount?: string;
   transaction?: AccountTransaction;
   defaultTransactionType?: AccountTransactionType;
+  platforms?: string[];
 }
 
 export function AccountTransactionModal({
@@ -22,14 +23,16 @@ export function AccountTransactionModal({
   defaultAccount = "RRSP",
   transaction,
   defaultTransactionType = "investment_buy",
+  platforms = platformOptions,
 }: Props) {
+  const defaultPlatform = platforms[0] || "";
   const [transactionType, setTransactionType] = useState<AccountTransactionType>(
     transaction?.transaction_type || defaultTransactionType
   );
   const [form, setForm] = useState({
     transaction_date: transaction?.transaction_date || new Date().toISOString().slice(0, 10),
     account_name: transaction?.account_name || defaultAccount,
-    platform_name: transaction ? transaction.platform_name || "" : "Wealthsimple",
+    platform_name: transaction ? transaction.platform_name || "" : defaultPlatform,
     source_platform_name: transaction?.source_platform_name || "",
     broad_category: transaction?.broad_category || "",
     precise_category: transaction?.precise_category || "",
@@ -44,9 +47,9 @@ export function AccountTransactionModal({
     fee_currency: transaction?.fee_currency || transaction?.currency || "CAD",
     notes: transaction?.notes || "",
   });
-  const platforms = transaction?.platform_name && !platformOptions.includes(transaction.platform_name)
-    ? [transaction.platform_name, ...platformOptions]
-    : platformOptions;
+  const platformChoices = transaction?.platform_name && !platforms.includes(transaction.platform_name)
+    ? [transaction.platform_name, ...platforms]
+    : platforms;
   const [error, setError] = useState("");
   const [contributions, setContributions] = useState<ContributionFunding[]>([]);
   const [fundingCashSources, setFundingCashSources] = useState<FundingCashSource[]>(() => {
@@ -67,6 +70,12 @@ export function AccountTransactionModal({
   );
   const requiresFunding = ["investment_buy", "transfer"].includes(transactionType);
   const isCurrencyExchange = transactionType === "currency_exchange";
+
+  useEffect(() => {
+    if (!transaction && defaultPlatform) {
+      setForm((current) => current.platform_name ? current : { ...current, platform_name: defaultPlatform });
+    }
+  }, [defaultPlatform, transaction]);
 
   useEffect(() => {
     if (!requiresFunding) {
@@ -181,12 +190,12 @@ export function AccountTransactionModal({
             <label>{transactionType === "transfer" ? "To Platform" : "Platform"}</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
               <option value="">No platform</option>
-              {platforms.map((platform) => (
+              {platformChoices.map((platform) => (
                 <option key={platform} value={platform}>{platform}</option>
               ))}
             </select>
           </div>
-          {transactionType === "transfer" && <div className="field"><label>From Platform</label><select value={form.source_platform_name} onChange={(e) => { setForm({ ...form, source_platform_name: e.target.value }); setFundingCashSources([]); }}><option value="">Select source platform</option>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></div>}
+          {transactionType === "transfer" && <div className="field"><label>From Platform</label><select value={form.source_platform_name} onChange={(e) => { setForm({ ...form, source_platform_name: e.target.value }); setFundingCashSources([]); }}><option value="">Select source platform</option>{platformChoices.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></div>}
           {isCurrencyExchange && <>
             <div className="field"><label>From Amount</label><input type="number" step="0.01" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
             <div className="field"><label>From Currency</label><select value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>

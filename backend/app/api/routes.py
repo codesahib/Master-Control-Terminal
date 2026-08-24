@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from openpyxl import load_workbook
@@ -61,6 +62,11 @@ router = APIRouter()
 @router.get("/years", response_model=list[int])
 def list_years():
     return [int(year) for year in TRACKED_YEARS]
+
+
+@router.get("/platforms", response_model=list[str])
+def list_platforms(db: Session = Depends(get_db)):
+    return list(db.scalars(select(Platform.canonical_name).order_by(Platform.canonical_name)))
 
 
 def serialize_transaction(txn, db: Session) -> TransactionRead:

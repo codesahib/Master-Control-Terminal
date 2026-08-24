@@ -8,28 +8,36 @@ interface Props {
   onSaved: () => Promise<void>;
   defaultAccount?: string;
   contribution?: Contribution;
+  platforms?: string[];
 }
 
-function contributionForm(contribution: Contribution | undefined, defaultAccount: string) {
+function contributionForm(contribution: Contribution | undefined, defaultAccount: string, defaultPlatform: string) {
   return {
     transaction_date: contribution?.transaction_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
     account_name: contribution?.account_name || defaultAccount,
-    platform_name: contribution ? contribution.platform_name || "" : "Wealthsimple",
+    platform_name: contribution ? contribution.platform_name || "" : defaultPlatform,
     amount: String(contribution?.amount ?? 0),
     notes: contribution?.notes || "",
   };
 }
 
-export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution }: Props) {
-  const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount));
+export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution, platforms = platformOptions }: Props) {
+  const defaultPlatform = platforms[0] || "";
+  const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount, defaultPlatform));
   const [error, setError] = useState("");
-  const platforms = contribution?.platform_name && !platformOptions.includes(contribution.platform_name)
-    ? [contribution.platform_name, ...platformOptions]
-    : platformOptions;
+  const platformChoices = contribution?.platform_name && !platforms.includes(contribution.platform_name)
+    ? [contribution.platform_name, ...platforms]
+    : platforms;
 
   useEffect(() => {
-    setForm(contributionForm(contribution, defaultAccount));
+    setForm(contributionForm(contribution, defaultAccount, defaultPlatform));
   }, [contribution, defaultAccount]);
+
+  useEffect(() => {
+    if (!contribution && defaultPlatform) {
+      setForm((current) => current.platform_name ? current : { ...current, platform_name: defaultPlatform });
+    }
+  }, [contribution, defaultPlatform]);
 
   async function submit() {
     setError("");
@@ -72,7 +80,7 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
             <label>Platform</label>
             <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
               <option value="">No platform</option>
-              {platforms.map((platform) => (
+              {platformChoices.map((platform) => (
                 <option key={platform} value={platform}>{platform}</option>
               ))}
             </select>

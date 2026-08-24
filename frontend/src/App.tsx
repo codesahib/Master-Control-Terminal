@@ -29,6 +29,7 @@ function App() {
   const [selectedAccount, setSelectedAccount] = useState<string>("RRSP");
   const [accountYear, setAccountYear] = useState<YearFilter>(currentYear);
   const [years, setYears] = useState<number[]>([]);
+  const [platforms, setPlatforms] = useState<string[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotal, setHistoryTotal] = useState(0);
@@ -259,6 +260,7 @@ function App() {
 
   useEffect(() => {
     api.get<number[]>("/years").then((response) => setYears(response.data));
+    api.get<string[]>("/platforms").then((response) => setPlatforms(response.data));
   }, []);
 
   useEffect(() => {
@@ -408,7 +410,7 @@ function App() {
               <div className="table-controls">
                 <label>Sort <select value={accountActivitySortDirection} onChange={(e) => { setAccountActivitySortDirection(e.target.value as "asc" | "desc"); setAccountActivityPage(1); }}><option value="desc">Date: newest</option><option value="asc">Date: oldest</option></select></label>
                 <label>Type <select value={accountActivityType} onChange={(e) => { setAccountActivityType(e.target.value as TransactionType | ""); setAccountActivityPage(1); }}><option value="">All</option>{["investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment", "quantity_adjustment", "currency_exchange"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
-                <label>Platform <input value={accountActivityPlatform} placeholder="All" onChange={(e) => { setAccountActivityPlatform(e.target.value); setAccountActivityPage(1); }} /></label>
+                <label>Platform <select value={accountActivityPlatform} onChange={(e) => { setAccountActivityPlatform(e.target.value); setAccountActivityPage(1); }}><option value="">All</option>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
               </div>
             }
             pagination={{ page: accountActivityPage, pageSize: 10, total: accountActivityTotal, onPageChange: setAccountActivityPage }}
@@ -455,6 +457,7 @@ function App() {
             onSaved={refreshAfterSave}
             defaultAccount={modalAccount || selectedAccount}
             contribution={editingContribution}
+            platforms={platforms}
           />
         )}
 
@@ -464,6 +467,7 @@ function App() {
             onSaved={refreshAfterSave}
             defaultAccount={modalAccount || selectedAccount}
             transaction={editingAccountTransaction}
+            platforms={platforms}
           />
         )}
       </div>
@@ -560,7 +564,7 @@ function App() {
             <div className="table-controls">
               <label>Sort <select value={historySortDirection} onChange={(e) => { setHistorySortDirection(e.target.value as "asc" | "desc"); setHistoryPage(1); }}><option value="desc">Date: newest</option><option value="asc">Date: oldest</option></select></label>
               <label>Type <select value={historyType} onChange={(e) => { setHistoryType(e.target.value as TransactionType | ""); setHistoryPage(1); }}><option value="">All</option>{["contribution", "investment_buy", "investment_sell", "transfer", "dividend_interest", "dividend_reinvestment", "quantity_adjustment", "currency_exchange"].map((type) => <option key={type} value={type}>{type.replace(/_/g, " ")}</option>)}</select></label>
-              <label>Platform <input value={historyPlatform} placeholder="All" onChange={(e) => { setHistoryPlatform(e.target.value); setHistoryPage(1); }} /></label>
+              <label>Platform <select value={historyPlatform} onChange={(e) => { setHistoryPlatform(e.target.value); setHistoryPage(1); }}><option value="">All</option>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
             </div>
           }
           pagination={{ page: historyPage, pageSize: 10, total: historyTotal, onPageChange: setHistoryPage }}
@@ -573,6 +577,7 @@ function App() {
           onSaved={refreshAfterSave}
           defaultAccount={modalAccount}
           contribution={editingContribution}
+          platforms={platforms}
         />
       )}
 
@@ -582,6 +587,7 @@ function App() {
           onSaved={refreshAfterSave}
           defaultAccount={modalAccount}
           transaction={editingAccountTransaction}
+          platforms={platforms}
         />
       )}
     </div>
