@@ -107,9 +107,3 @@ export interface ContributionLimitSetting {
   new_room: number;
   total_room: number;
 }
-
-export interface TimeSeriesPoint {
-  month: string;
-  contributions: number;
-  investments: number;
-}

@@ -5,7 +5,7 @@ import { AccountTransactionModal } from "./components/AccountTransactionModal";
 import { ContributionModal } from "./components/ContributionModal";
 import { DistributionChart } from "./components/DistributionChart";
 import { TransactionTable } from "./components/TransactionTable";
-import { AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedTransactions, TimeSeriesPoint, Transaction, TransactionType } from "./types";
+import { AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedTransactions, Transaction, TransactionType } from "./types";
 
 const ACCOUNT_NAMES = ["RRSP", "TFSA", "FHSA"];
 type YearFilter = number | "all";
@@ -55,7 +55,6 @@ function App() {
   const [accountLimits, setAccountLimits] = useState<ContributionRoom[]>([]);
   const [contributionLimitSettings, setContributionLimitSettings] = useState<ContributionLimitSetting[]>([]);
   const [savingLimitKey, setSavingLimitKey] = useState<string | undefined>();
-  const [timeline, setTimeline] = useState<TimeSeriesPoint[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [backupError, setBackupError] = useState<string | null>(null);
@@ -81,13 +80,12 @@ function App() {
       ...(historyType ? { transaction_type: historyType } : {}),
       ...(historyPlatform ? { platform: historyPlatform } : {}),
     };
-    const [tx, sector, account, platform, room, series] = await Promise.all([
+    const [tx, sector, account, platform, room] = await Promise.all([
       api.get<PaginatedTransactions>("/transactions", { params: historyParams }),
       api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "sector", category_level: categoryLevel, currency: globalCurrency, ...params } }),
       api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "account", currency: globalCurrency, ...params } }),
       api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "platform", currency: globalCurrency, ...params } }),
       fetchContributionRooms(globalYear),
-      api.get<TimeSeriesPoint[]>("/analytics/timeseries", { params: { ...params, currency: globalCurrency } }),
     ]);
 
     setTransactions(tx.data.items);
@@ -96,7 +94,6 @@ function App() {
     setAccountData(account.data);
     setPlatformData(platform.data);
     setLimits(room);
-    setTimeline(series.data);
   }
 
   async function refreshAccountDetails() {
@@ -274,14 +271,14 @@ function App() {
     }
   }, [view, selectedAccount, accountYear, accountActivityPage, accountActivityType, accountActivityPlatform, accountActivitySortDirection]);
 
-  const timeSeriesOption = {
+  const balanceOption = {
     tooltip: { trigger: "axis" },
     legend: { textStyle: { color: "#dbe7ff" } },
-    xAxis: { type: "category", data: timeline.map((t) => t.month), axisLabel: { color: "#9aa7cf" } },
+    xAxis: { type: "category", data: ACCOUNT_NAMES, axisLabel: { color: "#9aa7cf" } },
     yAxis: { type: "value", axisLabel: { color: "#9aa7cf" } },
     series: [
-      { name: "Contributions", type: "line", smooth: true, data: timeline.map((t) => t.contributions) },
-      { name: "Investments", type: "line", smooth: true, data: timeline.map((t) => t.investments) },
+      { name: "Used", type: "bar", stack: "balance", data: ACCOUNT_NAMES.map((name) => limits.find((limit) => limit.account === name)?.used ?? 0) },
+      { name: "Remaining", type: "bar", stack: "balance", data: ACCOUNT_NAMES.map((name) => limits.find((limit) => limit.account === name)?.remaining ?? 0) },
     ],
   };
 
@@ -552,8 +549,8 @@ function App() {
         <DistributionChart title="Platform Distribution" data={platformData} />
 
         <div className="panel chart" style={{ gridColumn: "span 12" }}>
-          <h3>Contributions vs Investments Trend ({globalCurrency})</h3>
-          <ReactECharts option={timeSeriesOption} style={{ height: 300 }} />
+          <h3>Used vs Remaining Balance</h3>
+          <ReactECharts option={balanceOption} style={{ height: 300 }} />
         </div>
 
         <TransactionTable
