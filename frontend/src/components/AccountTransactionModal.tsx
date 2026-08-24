@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import { AccountTransaction, AccountTransactionType, ContributionFunding, FundingCashSource } from "../types";
+import { AccountTransaction, AccountTransactionType, ContributionFunding, FundingCashSource, SymbolSearchResult } from "../types";
 import {
   accountTransactionOptions,
   categoryOptions,
@@ -36,6 +36,7 @@ export function AccountTransactionModal({
     source_platform_name: transaction?.source_platform_name || "",
     broad_category: transaction?.broad_category || "",
     precise_category: transaction?.precise_category || "",
+    instrument_id: transaction?.instrument_id || undefined,
     symbol: transaction?.symbol || "",
     instrument_name: "",
     amount: String(transaction?.amount ?? 0),
@@ -51,6 +52,10 @@ export function AccountTransactionModal({
     ? [transaction.platform_name, ...platforms]
     : platforms;
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [symbolQuery, setSymbolQuery] = useState(transaction?.symbol || "");
+  const [symbolResults, setSymbolResults] = useState<SymbolSearchResult[]>([]);
+  const [isSearchingSymbols, setIsSearchingSymbols] = useState(false);
   const [contributions, setContributions] = useState<ContributionFunding[]>([]);
   const [fundingCashSources, setFundingCashSources] = useState<FundingCashSource[]>(() => {
     const sources = new Map<string, FundingCashSource>();
@@ -87,6 +92,34 @@ export function AccountTransactionModal({
       .then((response) => setContributions(response.data));
   }, [form.account_name, requiresFunding]);
 
+  useEffect(() => {
+    if (!requiresSymbol || symbolQuery.trim().length < 2) {
+      setSymbolResults([]);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setIsSearchingSymbols(true);
+      api
+        .get<SymbolSearchResult[]>("/symbols/search", { params: { q: symbolQuery.trim() } })
+        .then((response) => setSymbolResults(response.data))
+        .catch(() => setSymbolResults([]))
+        .finally(() => setIsSearchingSymbols(false));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [requiresSymbol, symbolQuery]);
+
+  function selectSymbol(symbol: SymbolSearchResult) {
+    setForm({
+      ...form,
+      instrument_id: symbol.id,
+      symbol: symbol.symbol,
+      currency: symbol.currency || form.currency,
+      instrument_name: symbol.name || form.instrument_name,
+    });
+    setSymbolQuery(symbol.provider_symbol);
+    setSymbolResults([]);
+  }
+
   function toggleFundingCashSource(contribution: ContributionFunding) {
     setFundingCashSources((current) =>
       current.some((funding) => funding.platform_name === contribution.platform_name)
@@ -112,7 +145,8 @@ export function AccountTransactionModal({
     updateFundingAmount(contribution.platform_name, String(Math.round(amount * 100) / 100));
   }
 
-  async function submit() {
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setError("");
     if (!form.transaction_date || !form.account_name || !form.platform_name || form.amount === "") {
       setError("Amount, date, account, and platform are required");
@@ -127,6 +161,7 @@ export function AccountTransactionModal({
       return;
     }
 
+    setIsSaving(true);
     try {
       const payload = {
         transaction_type: transactionType,
@@ -136,6 +171,7 @@ export function AccountTransactionModal({
         source_platform_name: transactionType === "transfer" ? form.source_platform_name : null,
         broad_category: form.broad_category || null,
         precise_category: form.precise_category || null,
+        instrument_id: requiresSymbol ? form.instrument_id || null : null,
         symbol: requiresSymbol ? form.symbol || null : null,
         instrument_name: form.instrument_name || null,
         amount: Number(form.amount),
@@ -161,104 +197,132 @@ export function AccountTransactionModal({
       const detail = e?.response?.data?.detail;
       console.error("Failed to save account transaction", { detail, error: e });
       setError(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail?.toString() || "Failed to save account transaction");
+    } finally {
+      setIsSaving(false);
     }
   }
 
   return (
-    <div className="modal">
+    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="account-transaction-modal-title">
       <div className="modal-content panel">
         <div className="header">
-          <h3>{transaction ? "Edit Account Transaction" : "New Account Transaction"}</h3>
-          <button className="btn-secondary btn" onClick={onClose}>Close</button>
+          <h3 id="account-transaction-modal-title">{transaction ? "Edit Account Transaction" : "New Account Transaction"}</h3>
+          <button className="btn-secondary btn" type="button" onClick={onClose}>Close</button>
         </div>
 
-        <div className="field" style={{ marginBottom: 12 }}>
-          <label>What transaction are you recording?</label>
-          <select value={transactionType} onChange={(e) => setTransactionType(e.target.value as AccountTransactionType)}>
-            {accountTransactionOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="form-grid">
-          <div className="field"><label>Date</label><input type="date" value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
-          <div className="field"><label>{isCurrencyExchange ? "To Amount" : "Amount"}</label><input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-          <div className="field"><label>{isCurrencyExchange ? "To Currency" : "Currency"}</label><select value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => { setForm({ ...form, account_name: e.target.value }); setFundingCashSources([]); }}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
-          <div className="field">
-            <label>{transactionType === "transfer" ? "To Platform" : "Platform"}</label>
-            <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-              <option value="">No platform</option>
-              {platformChoices.map((platform) => (
-                <option key={platform} value={platform}>{platform}</option>
+        <form onSubmit={submit}>
+          <div className="field field-spaced">
+            <label htmlFor="account-transaction-type">What transaction are you recording?</label>
+            <select id="account-transaction-type" value={transactionType} onChange={(e) => setTransactionType(e.target.value as AccountTransactionType)}>
+              {accountTransactionOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           </div>
-          {transactionType === "transfer" && <div className="field"><label>From Platform</label><select value={form.source_platform_name} onChange={(e) => { setForm({ ...form, source_platform_name: e.target.value }); setFundingCashSources([]); }}><option value="">Select source platform</option>{platformChoices.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></div>}
-          {isCurrencyExchange && <>
-            <div className="field"><label>From Amount</label><input type="number" step="0.01" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
-            <div className="field"><label>From Currency</label><select value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-          </>}
-          {requiresFunding && (
-            <div className="field" style={{ gridColumn: "1 / -1" }}>
-              <label>Funding Sources (optional)</label>
-              {contributions.filter((contribution) => transactionType !== "transfer" || contribution.platform_name.toLowerCase() === form.source_platform_name.toLowerCase()).map((contribution) => {
-                const funding = fundingCashSources.find((item) => item.platform_name === contribution.platform_name);
-                return (
-                  <div key={contribution.id} style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                    <label>
-                      <input type="checkbox" checked={Boolean(funding)} onChange={() => toggleFundingCashSource(contribution)} />
-                      {" "}{contribution.platform_name} · {contribution.source_label} · ${contribution.remaining_amount.toFixed(2)} remaining
-                    </label>
-                    {funding && <>
-                      <input aria-label={`Funding amount for ${contribution.platform_name}`} type="number" min="0.01" step="0.01" value={funding.amount || ""} onChange={(e) => updateFundingAmount(contribution.platform_name, e.target.value)} />
-                      <button type="button" className="btn-secondary btn" onClick={() => useRemainingAmount(contribution)}>Use remaining amount</button>
-                    </>}
-                  </div>
-                );
-              })}
+
+          <div className="form-grid">
+            <div className="field"><label htmlFor="account-transaction-date">Date</label><input id="account-transaction-date" type="date" required value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
+            <div className="field"><label htmlFor="account-transaction-amount">{isCurrencyExchange ? "To Amount" : "Amount"}</label><input id="account-transaction-amount" type="number" min="0.01" step="0.01" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
+            <div className="field"><label htmlFor="account-transaction-currency">{isCurrencyExchange ? "To Currency" : "Currency"}</label><select id="account-transaction-currency" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
+            <div className="field"><label htmlFor="account-transaction-account">Account</label><select id="account-transaction-account" required value={form.account_name} onChange={(e) => { setForm({ ...form, account_name: e.target.value }); setFundingCashSources([]); }}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
+            <div className="field">
+              <label htmlFor="account-transaction-platform">{transactionType === "transfer" ? "To Platform" : "Platform"}</label>
+              <select id="account-transaction-platform" required value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
+                <option value="">Select platform</option>
+                {platformChoices.map((platform) => (
+                  <option key={platform} value={platform}>{platform}</option>
+                ))}
+              </select>
             </div>
-          )}
-          {!isCurrencyExchange && <div className="field">
-            <label>Broad Category</label>
-            <select
-              value={form.broad_category}
-              onChange={(e) => {
-                const broadCategory = e.target.value;
-                setForm({
-                  ...form,
-                  broad_category: broadCategory,
-                  precise_category: preciseOptionsFor(broadCategory)[0] || "",
-                });
-              }}
-            >
-              <option value="">None</option>
-              {Object.keys(categoryOptions).map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-          </div>}
-          {!isCurrencyExchange && <div className="field">
-            <label>Precise Category</label>
-            <select value={form.precise_category} onChange={(e) => setForm({ ...form, precise_category: e.target.value })}>
-              <option value="">None</option>
-              {preciseOptionsFor(form.broad_category).map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-          </div>}
-          {requiresSymbol && <div className="field"><label>Symbol</label><input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} /></div>}
-          {requiresSymbol && <div className="field"><label>Quantity</label><input type="number" step="0.0001" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>}
-          <div className="field"><label>Fees</label><input type="number" step="0.01" value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} /></div>
-          <div className="field"><label>Fee Currency</label><select value={form.fee_currency} onChange={(e) => setForm({ ...form, fee_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-          {!isCurrencyExchange && <div className="field"><label>Instrument Name</label><input value={form.instrument_name} onChange={(e) => setForm({ ...form, instrument_name: e.target.value })} /></div>}
-          <div className="field" style={{ gridColumn: "1 / -1" }}><label>Notes</label><textarea value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
-        </div>
-        {error && <small style={{ color: "#ff6b6b" }}>{error}</small>}
-        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
-          <button className="btn" onClick={submit}>Save Account Transaction</button>
-        </div>
+            {transactionType === "transfer" && <div className="field"><label htmlFor="account-transaction-source-platform">From Platform</label><select id="account-transaction-source-platform" required value={form.source_platform_name} onChange={(e) => { setForm({ ...form, source_platform_name: e.target.value }); setFundingCashSources([]); }}><option value="">Select source platform</option>{platformChoices.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></div>}
+            {isCurrencyExchange && <>
+              <div className="field"><label htmlFor="account-transaction-source-amount">From Amount</label><input id="account-transaction-source-amount" type="number" min="0.01" step="0.01" inputMode="decimal" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
+              <div className="field"><label htmlFor="account-transaction-source-currency">From Currency</label><select id="account-transaction-source-currency" value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
+            </>}
+            {requiresFunding && (
+              <div className="field field-span">
+                <span className="field-label">Funding Sources (optional)</span>
+                {contributions.filter((contribution) => transactionType !== "transfer" || contribution.platform_name.toLowerCase() === form.source_platform_name.toLowerCase()).map((contribution) => {
+                  const funding = fundingCashSources.find((item) => item.platform_name === contribution.platform_name);
+                  return (
+                    <div className="funding-source" key={contribution.id}>
+                      <label>
+                        <input type="checkbox" checked={Boolean(funding)} onChange={() => toggleFundingCashSource(contribution)} />
+                        {" "}{contribution.platform_name} · {contribution.source_label} · ${contribution.remaining_amount.toFixed(2)} remaining
+                      </label>
+                      {funding && <>
+                        <input aria-label={`Funding amount for ${contribution.platform_name}`} type="number" min="0.01" step="0.01" inputMode="decimal" required value={funding.amount || ""} onChange={(e) => updateFundingAmount(contribution.platform_name, e.target.value)} />
+                        <button type="button" className="btn-secondary btn" onClick={() => useRemainingAmount(contribution)}>Use remaining amount</button>
+                      </>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {!isCurrencyExchange && <div className="field">
+              <label htmlFor="account-transaction-broad-category">Broad Category</label>
+              <select
+                id="account-transaction-broad-category"
+                value={form.broad_category}
+                onChange={(e) => {
+                  const broadCategory = e.target.value;
+                  setForm({
+                    ...form,
+                    broad_category: broadCategory,
+                    precise_category: preciseOptionsFor(broadCategory)[0] || "",
+                  });
+                }}
+              >
+                <option value="">None</option>
+                {Object.keys(categoryOptions).map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </div>}
+            {!isCurrencyExchange && <div className="field">
+              <label htmlFor="account-transaction-precise-category">Precise Category</label>
+              <select id="account-transaction-precise-category" value={form.precise_category} onChange={(e) => setForm({ ...form, precise_category: e.target.value })}>
+                <option value="">None</option>
+                {preciseOptionsFor(form.broad_category).map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </div>}
+            {requiresSymbol && <div className="field symbol-field">
+              <label htmlFor="account-transaction-symbol">Symbol</label>
+              <input
+                id="account-transaction-symbol"
+                required
+                value={symbolQuery}
+                onChange={(e) => {
+                  setSymbolQuery(e.target.value);
+                  setForm({ ...form, instrument_id: undefined, symbol: e.target.value });
+                }}
+              />
+              {isSearchingSymbols && <small>Searching symbols...</small>}
+              {symbolResults.length > 0 && (
+                <div className="symbol-results">
+                  {symbolResults.map((symbol) => (
+                    <button className="symbol-result" type="button" key={symbol.id} onClick={() => selectSymbol(symbol)}>
+                      <strong>{symbol.provider_symbol}</strong>
+                      <span>{symbol.name || symbol.symbol}</span>
+                      <small>{[symbol.exchange, symbol.currency, symbol.asset_type].filter(Boolean).join(" · ")}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>}
+            {requiresSymbol && <div className="field"><label htmlFor="account-transaction-quantity">Quantity</label><input id="account-transaction-quantity" type="number" min="0" step="0.0001" inputMode="decimal" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>}
+            <div className="field"><label htmlFor="account-transaction-fees">Fees</label><input id="account-transaction-fees" type="number" min="0" step="0.01" inputMode="decimal" value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} /></div>
+            <div className="field"><label htmlFor="account-transaction-fee-currency">Fee Currency</label><select id="account-transaction-fee-currency" value={form.fee_currency} onChange={(e) => setForm({ ...form, fee_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
+            {!isCurrencyExchange && <div className="field"><label htmlFor="account-transaction-instrument-name">Instrument Name</label><input id="account-transaction-instrument-name" value={form.instrument_name} onChange={(e) => setForm({ ...form, instrument_name: e.target.value })} /></div>}
+            <div className="field field-span"><label htmlFor="account-transaction-notes">Notes</label><textarea id="account-transaction-notes" value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
+          </div>
+          {error && <small className="field-error">{error}</small>}
+          <div className="form-actions">
+            <button className="btn" type="submit" disabled={isSaving}>{isSaving ? "Saving" : "Save Account Transaction"}</button>
+          </div>
+        </form>
       </div>
     </div>
   );

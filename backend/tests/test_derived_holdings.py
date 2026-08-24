@@ -4,8 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
-from app.models.models import Account, Category, HoldingSnapshot, Instrument, Platform, Transaction, TransactionType
-from app.services.finance import distribution, list_holdings
+from app.models.models import Account, Category, HoldingSnapshot, Instrument, MarketPrice, Platform, Transaction, TransactionType
+from app.services.finance import distribution, grouped_holdings, portfolio_pl, list_holdings
 
 
 def test_holdings_are_derived_from_transactions_not_snapshots():
@@ -160,3 +160,58 @@ def test_currency_exchange_keeps_cash_and_positions_in_their_native_currency():
         assert cash[("Cash", "USD")]["book_value"] == 100
         assert position["currency"] == "USD"
         assert position["book_value"] == 600
+
+
+def test_holdings_and_pl_group_symbol_with_platform_children():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        questrade = Platform(canonical_name="Questrade")
+        wealthsimple = Platform(canonical_name="Wealthsimple")
+        instrument = Instrument(symbol="VEQT", provider_symbol="VEQT.TO")
+        db.add_all([account, questrade, wealthsimple, instrument])
+        db.flush()
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=questrade.id,
+                    instrument_id=instrument.id,
+                    amount=100,
+                    quantity=2,
+                ),
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 2),
+                    account_id=account.id,
+                    platform_id=wealthsimple.id,
+                    instrument_id=instrument.id,
+                    amount=180,
+                    quantity=3,
+                ),
+                MarketPrice(
+                    instrument_id=instrument.id,
+                    price=70,
+                    currency="CAD",
+                    priced_at=date(2026, 1, 3),
+                ),
+            ]
+        )
+        db.commit()
+
+        holding = next(row for row in grouped_holdings(db, account="TFSA", year=2026) if row["symbol"] == "VEQT")
+        pl = next(row for row in portfolio_pl(db, account="TFSA", year=2026) if row["symbol"] == "VEQT")
+
+        assert holding["quantity"] == 5
+        assert holding["book_value"] == 280
+        assert holding["average_price"] == 56
+        assert [child["platform_name"] for child in holding["children"]] == ["Questrade", "Wealthsimple"]
+        assert [child["quantity"] for child in holding["children"]] == [2, 3]
+        assert pl["market_value"] == 350
+        assert pl["unrealized_pl"] == 70
+        assert pl["unrealized_pl_pct"] == 25

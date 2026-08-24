@@ -22,6 +22,7 @@ from app.models.models import (
     TransactionType,
 )
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
+from app.services.market_data import latest_prices
 
 TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
@@ -175,12 +176,29 @@ def get_or_create_instrument(db: Session, symbol: str | None, name: str | None =
     normalized = symbol.strip().upper()
     inst = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == normalized.lower()))
     if inst:
+        if not inst.provider_symbol:
+            inst.provider_symbol = normalized
+            inst.provider = "yfinance"
         return inst
-    inst = Instrument(symbol=normalized, name=name)
+    inst = Instrument(symbol=normalized, name=name, provider_symbol=normalized, provider="yfinance")
     db.add(inst)
     db.commit()
     db.refresh(inst)
     return inst
+
+
+def resolve_instrument(db: Session, payload: TransactionCreate | AccountTransactionCreate) -> Instrument | None:
+    instrument_id = getattr(payload, "instrument_id", None)
+    if instrument_id:
+        instrument = db.get(Instrument, instrument_id)
+        if not instrument:
+            raise ValueError("selected symbol was not found")
+        return instrument
+    symbol = getattr(payload, "symbol", None)
+    instrument_name = getattr(payload, "instrument_name", None)
+    if not symbol:
+        return None
+    return get_or_create_instrument(db, symbol, instrument_name)
 
 
 def get_or_create_category(db: Session, broad: str | None, precise: str | None) -> Category | None:
@@ -212,8 +230,6 @@ def _save_transaction(
     account = get_or_create_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
     source_platform = normalize_platform(db, getattr(payload, "source_platform_name", None))
-    symbol = getattr(payload, "symbol", None)
-    instrument_name = getattr(payload, "instrument_name", None)
     broad_category = getattr(payload, "broad_category", None)
     precise_category = getattr(payload, "precise_category", None)
     quantity = getattr(payload, "quantity", None)
@@ -225,7 +241,7 @@ def _save_transaction(
     reversal_of_id = getattr(payload, "reversal_of_id", None)
     contribution_id = getattr(payload, "contribution_id", None)
     resolved_type = transaction_type or getattr(payload, "transaction_type")
-    instrument = get_or_create_instrument(db, symbol, instrument_name)
+    instrument = resolve_instrument(db, payload)
     category = get_or_create_category(db, broad_category, precise_category)
 
     if txn is None:
@@ -698,10 +714,13 @@ def list_holdings(db: Session, account=None, year=None):
         position = positions.setdefault(
             position_key,
             {
+                "instrument_id": instrument.id if instrument else None,
                 "account_name": account_row.name,
                 "platform_name": platform.canonical_name if platform else None,
                 "currency": currency,
                 "symbol": instrument.symbol if instrument else "Unspecified",
+                "provider_symbol": instrument.provider_symbol if instrument else None,
+                "name": instrument.name if instrument else None,
                 "broad_category": None,
                 "precise_category": None,
                 "quantity": 0.0,
@@ -743,6 +762,7 @@ def list_holdings(db: Session, account=None, year=None):
                     "as_of_date": as_of_date,
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
+                    "instrument_id": None,
                     "symbol": "Cash",
                     "broad_category": "Cash",
                     "precise_category": "Cash",
@@ -760,7 +780,10 @@ def list_holdings(db: Session, account=None, year=None):
                     "as_of_date": as_of_date,
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
+                    "instrument_id": row["instrument_id"],
                     "symbol": row["symbol"],
+                    "provider_symbol": row["provider_symbol"],
+                    "name": row["name"],
                     "broad_category": row["broad_category"],
                     "precise_category": row["precise_category"],
                     "record_type": "holding",
@@ -769,7 +792,127 @@ def list_holdings(db: Session, account=None, year=None):
                     "currency": row["currency"],
                 }
             )
-    return sorted(holdings, key=lambda row: (row["account_name"], row["record_type"], row["symbol"], row["currency"]))
+    return sorted(holdings, key=lambda row: (row["account_name"], row["record_type"], row["symbol"], row["currency"], row.get("platform_name") or ""))
+
+
+def grouped_holdings(db: Session, account=None, year=None):
+    return _group_holding_rows(list_holdings(db, account=account, year=year))
+
+
+def _group_holding_rows(rows: list[dict]):
+    grouped = {}
+    for row in rows:
+        key = (
+            row["record_type"],
+            row["instrument_id"],
+            row["symbol"],
+            row["currency"],
+        )
+        group = grouped.setdefault(
+            key,
+            {
+                **row,
+                "id": f"{row['record_type']}:{row['symbol']}:{row['currency']}",
+                "platform_name": None,
+                "quantity": 0.0 if row["quantity"] is not None else None,
+                "book_value": 0.0,
+                "average_price": None,
+                "children": [],
+            },
+        )
+        child = {**row, "average_price": _average_price(row), "children": []}
+        group["children"].append(child)
+        group["book_value"] = round(float(group["book_value"]) + float(row["book_value"]), 2)
+        if row["quantity"] is not None:
+            group["quantity"] = round(float(group["quantity"] or 0) + float(row["quantity"]), 6)
+    for group in grouped.values():
+        accounts = {child["account_name"] for child in group["children"]}
+        group["account_name"] = group["children"][0]["account_name"] if len(accounts) == 1 else "All"
+        group["average_price"] = _average_price(group)
+        group["children"].sort(key=lambda child: child.get("platform_name") or "")
+    return sorted(grouped.values(), key=lambda row: (row["record_type"], row["symbol"], row["currency"]))
+
+
+def _average_price(row: dict):
+    quantity = row.get("quantity")
+    if not quantity:
+        return None
+    return round(float(row["book_value"]) / float(quantity), 4)
+
+
+def portfolio_pl(db: Session, account=None, year=None, platform=None, status=None):
+    rows = _portfolio_pl_rows(db, account=account, year=year)
+    if platform:
+        rows = [row for row in rows if (row.get("platform_name") or "").lower() == platform.lower()]
+    if status:
+        rows = [row for row in rows if row.get("price_status", "").lower() == status.lower()]
+    return _group_pl_rows(rows)
+
+
+def _portfolio_pl_rows(db: Session, account=None, year=None):
+    prices = latest_prices(db)
+    rows = []
+    for holding in list_holdings(db, account=account, year=year):
+        row = dict(holding)
+        instrument_id = row.get("instrument_id")
+        price = prices.get(instrument_id) if instrument_id else None
+        if row["record_type"] != "cash" and row["quantity"] is None:
+            price = None
+        row["current_price"] = float(price.price) if price else None
+        row["price_currency"] = price.currency if price else None
+        row["priced_at"] = price.priced_at if price else None
+        row["provider_symbol"] = row.get("provider_symbol")
+        row["name"] = row.get("name")
+        if row["record_type"] == "cash":
+            row["market_value"] = row["book_value"]
+            row["unrealized_pl"] = 0.0
+            row["unrealized_pl_pct"] = 0.0
+            row["price_status"] = "cash"
+        elif row["quantity"] is None:
+            row["market_value"] = None
+            row["unrealized_pl"] = None
+            row["unrealized_pl_pct"] = None
+            row["price_status"] = "missing_quantity"
+        elif not price:
+            row["market_value"] = None
+            row["unrealized_pl"] = None
+            row["unrealized_pl_pct"] = None
+            row["price_status"] = "missing"
+        elif price.currency and price.currency != row["currency"]:
+            row["market_value"] = None
+            row["unrealized_pl"] = None
+            row["unrealized_pl_pct"] = None
+            row["price_status"] = "currency_mismatch"
+        else:
+            market_value = round(float(row["quantity"]) * float(price.price), 2)
+            unrealized_pl = round(market_value - float(row["book_value"]), 2)
+            row["market_value"] = market_value
+            row["unrealized_pl"] = unrealized_pl
+            row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
+            row["price_status"] = "stale" if price.priced_at < datetime.utcnow() - timedelta(hours=24) else "ok"
+        rows.append(row)
+    return rows
+
+
+def _group_pl_rows(rows: list[dict]):
+    grouped = _group_holding_rows(rows)
+    for group in grouped:
+        children = group["children"]
+        market_values = [float(row["market_value"]) for row in children if row.get("market_value") is not None]
+        unrealized_values = [float(row["unrealized_pl"]) for row in children if row.get("unrealized_pl") is not None]
+        statuses = {row["price_status"] for row in children}
+        group["current_price"] = children[0].get("current_price") if len({row.get("current_price") for row in children}) == 1 else None
+        group["price_currency"] = children[0].get("price_currency") if len({row.get("price_currency") for row in children}) == 1 else None
+        group["priced_at"] = max((row["priced_at"] for row in children if row.get("priced_at")), default=None)
+        group["market_value"] = round(sum(market_values), 2) if market_values else None
+        group["unrealized_pl"] = round(sum(unrealized_values), 2) if unrealized_values else None
+        group["unrealized_pl_pct"] = (
+            round(float(group["unrealized_pl"]) / float(group["book_value"]) * 100, 2)
+            if group.get("unrealized_pl") is not None and group["book_value"]
+            else None
+        )
+        group["price_status"] = children[0]["price_status"] if len(statuses) == 1 else "mixed"
+    return grouped
 
 
 def get_contribution_room(db: Session, tax_year: int):

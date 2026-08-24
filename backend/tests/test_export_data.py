@@ -16,6 +16,7 @@ from app.models.models import (
     ImportStatus,
     ImportType,
     Instrument,
+    MarketPrice,
     Platform,
     PlatformAlias,
     Transaction,
@@ -82,7 +83,8 @@ def test_export_includes_persisted_records():
             market_value=1200,
         )
         imp = Import(import_type=ImportType.contributions, source_filename="backup.xlsx", status=ImportStatus.parsed)
-        db.add_all([limit, transaction, investment, reinvestment, snapshot, imp])
+        price = MarketPrice(instrument_id=instrument.id, price=42, currency="CAD", priced_at=date(2026, 6, 4))
+        db.add_all([limit, transaction, investment, reinvestment, snapshot, imp, price])
         db.flush()
         investment.contribution_id = transaction.id
 

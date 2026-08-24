@@ -26,7 +26,10 @@ from app.schemas.schemas import (
     HoldingRead,
     ImportPreviewResponse,
     ImportPreviewRow,
+    MarketPriceRefreshResult,
     PaginatedTransactionRead,
+    PaginatedPortfolioPLRead,
+    SymbolRead,
     TimeSeriesPoint,
     TransactionCreate,
     TransactionRead,
@@ -40,13 +43,14 @@ from app.services.finance import (
     export_all_data,
     get_all_contribution_room,
     get_contribution_room,
+    grouped_holdings,
     list_account_transactions,
     list_available_contributions,
     list_contributions,
-    list_holdings,
     list_contribution_limits,
     list_transaction_fundings,
     list_transactions,
+    portfolio_pl,
     restore_all_data,
     TRACKED_YEARS,
     timeseries,
@@ -55,6 +59,7 @@ from app.services.finance import (
     update_contribution,
     update_transaction,
 )
+from app.services.market_data import refresh_market_prices, search_symbols
 
 router = APIRouter()
 
@@ -67,6 +72,38 @@ def list_years():
 @router.get("/platforms", response_model=list[str])
 def list_platforms(db: Session = Depends(get_db)):
     return list(db.scalars(select(Platform.canonical_name).order_by(Platform.canonical_name)))
+
+
+@router.get("/symbols/search", response_model=list[SymbolRead])
+def search_symbols_endpoint(
+    q: str = Query(min_length=1),
+    limit: int = Query(default=8, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    return search_symbols(db, q, limit)
+
+
+@router.post("/market-prices/refresh", response_model=list[MarketPriceRefreshResult])
+def refresh_market_prices_endpoint(db: Session = Depends(get_db)):
+    return refresh_market_prices(db)
+
+
+@router.get("/portfolio/pl", response_model=PaginatedPortfolioPLRead)
+def portfolio_pl_endpoint(
+    account: str | None = Query(default=None),
+    platform: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    year: int | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=500),
+    sort_direction: Literal["asc", "desc"] = Query(default="desc"),
+    db: Session = Depends(get_db),
+):
+    rows = portfolio_pl(db, account=account, platform=platform, status=status, year=year)
+    rows = sorted(rows, key=lambda row: row["symbol"].lower(), reverse=sort_direction == "desc")
+    total = len(rows)
+    start = (page - 1) * page_size
+    return PaginatedPortfolioPLRead(items=rows[start:start + page_size], total=total, page=page, page_size=page_size)
 
 
 def serialize_transaction(txn, db: Session) -> TransactionRead:
@@ -82,6 +119,7 @@ def serialize_transaction(txn, db: Session) -> TransactionRead:
         account_name=account.name if account else None,
         platform_name=platform.canonical_name if platform else None,
         source_platform_name=source_platform.canonical_name if source_platform else None,
+        instrument_id=instrument.id if instrument else None,
         symbol=instrument.symbol if instrument else None,
         broad_category=category.broad if category else None,
         precise_category=category.precise if category else None,
@@ -107,6 +145,7 @@ def serialize_transaction_row(row, db: Session) -> TransactionRead:
         account_name=account_name,
         platform_name=platform_name,
         source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
+        instrument_id=txn.instrument_id,
         symbol=symbol_name,
         broad_category=broad_category,
         precise_category=precise_category,
@@ -145,6 +184,7 @@ def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRea
         account_name=account_name,
         platform_name=platform_name,
         source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
+        instrument_id=txn.instrument_id,
         symbol=symbol_name,
         broad_category=broad_category,
         precise_category=precise_category,
@@ -163,13 +203,21 @@ def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRea
 
 @router.post("/transactions", response_model=TransactionRead)
 def create_transaction_endpoint(payload: TransactionCreate, db: Session = Depends(get_db)):
-    txn = create_transaction(db, payload)
+    try:
+        txn = create_transaction(db, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return serialize_transaction(txn, db)
 
 
 @router.put("/transactions/{transaction_id}", response_model=TransactionRead)
 def update_transaction_endpoint(transaction_id: int, payload: TransactionCreate, db: Session = Depends(get_db)):
-    txn = update_transaction(db, transaction_id, payload)
+    try:
+        txn = update_transaction(db, transaction_id, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not txn:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return serialize_transaction(txn, db)
@@ -290,7 +338,7 @@ def list_holdings_endpoint(
     year: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    return list_holdings(db, account=account, year=year)
+    return grouped_holdings(db, account=account, year=year)
 
 
 @router.get("/limits/{year}", response_model=list[ContributionRoomRead])

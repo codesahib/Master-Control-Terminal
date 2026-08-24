@@ -31,6 +31,15 @@ export function DistributionChart({ title, data, actions }: Props) {
         return `${name}  ${percent.toFixed(1)}%  ($${value.toLocaleString()})`;
       },
     },
+    media: [
+      {
+        query: { maxWidth: 700 },
+        option: {
+          legend: { orient: "horizontal", left: 0, right: 0, top: "bottom" },
+          series: [{ center: ["50%", "42%"], radius: ["28%", "52%"], label: { show: false } }],
+        },
+      },
+    ],
     series: [
       {
         type: "pie",
@@ -54,7 +63,11 @@ export function DistributionChart({ title, data, actions }: Props) {
         <h3>{title}</h3>
         {actions}
       </div>
-      <ReactECharts option={option} style={{ height: 360 }} />
+      {data.length === 0 ? (
+        <div className="chart-empty">No chart data for the current filters.</div>
+      ) : (
+        <ReactECharts className="chart-canvas" option={option} />
+      )}
     </div>
   );
 }

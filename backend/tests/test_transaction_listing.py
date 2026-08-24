@@ -42,10 +42,11 @@ def test_list_contributions_and_account_transactions_are_separated():
         db.commit()
 
         contributions = list_contributions(db, account="TFSA", year=2026)
-        activity = list_account_transactions(db, account="TFSA", year=2026)
+        activity, total = list_account_transactions(db, account="TFSA", year=2026)
 
         assert len(contributions) == 1
         assert contributions[0][0].transaction_type == TransactionType.contribution
+        assert total == 1
         assert len(activity) == 1
         assert activity[0][0].transaction_type == TransactionType.investment_buy
 
@@ -80,5 +81,9 @@ def test_rrsp_account_transactions_use_the_rrsp_contribution_period():
         )
         db.commit()
 
-        assert [row[0].transaction_date for row in list_account_transactions(db, account="RRSP", year=2025)] == [date(2026, 1, 9)]
-        assert [row[0].transaction_date for row in list_account_transactions(db, account="RRSP", year=2026)] == [date(2026, 3, 3)]
+        rows, total = list_account_transactions(db, account="RRSP", year=2025)
+        assert total == 1
+        assert [row[0].transaction_date for row in rows] == [date(2026, 1, 9)]
+        rows, total = list_account_transactions(db, account="RRSP", year=2026)
+        assert total == 1
+        assert [row[0].transaction_date for row in rows] == [date(2026, 3, 3)]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Contribution } from "../types";
 import { platformOptions } from "./transactionFormConfig";
@@ -25,6 +25,7 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
   const defaultPlatform = platforms[0] || "";
   const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount, defaultPlatform));
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const platformChoices = contribution?.platform_name && !platforms.includes(contribution.platform_name)
     ? [contribution.platform_name, ...platforms]
     : platforms;
@@ -39,8 +40,10 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
     }
   }, [contribution, defaultPlatform]);
 
-  async function submit() {
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setError("");
+    setIsSaving(true);
     try {
       const payload = {
         transaction_date: form.transaction_date,
@@ -61,36 +64,40 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       setError(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail?.toString() || "Failed to save contribution");
+    } finally {
+      setIsSaving(false);
     }
   }
 
   return (
-    <div className="modal">
+    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="contribution-modal-title">
       <div className="modal-content panel">
         <div className="header">
-          <h3>{contribution ? "Edit Contribution" : "New Contribution"}</h3>
-          <button className="btn-secondary btn" onClick={onClose}>Close</button>
+          <h3 id="contribution-modal-title">{contribution ? "Edit Contribution" : "New Contribution"}</h3>
+          <button className="btn-secondary btn" type="button" onClick={onClose}>Close</button>
         </div>
 
-        <div className="form-grid">
-          <div className="field"><label>Date</label><input type="date" value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
-          <div className="field"><label>Amount</label><input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-          <div className="field"><label>Account</label><select value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
-          <div className="field">
-            <label>Platform</label>
-            <select value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-              <option value="">No platform</option>
-              {platformChoices.map((platform) => (
-                <option key={platform} value={platform}>{platform}</option>
-              ))}
-            </select>
+        <form onSubmit={submit}>
+          <div className="form-grid">
+            <div className="field"><label htmlFor="contribution-date">Date</label><input id="contribution-date" type="date" required value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
+            <div className="field"><label htmlFor="contribution-amount">Amount</label><input id="contribution-amount" type="number" min="0.01" step="0.01" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
+            <div className="field"><label htmlFor="contribution-account">Account</label><select id="contribution-account" required value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
+            <div className="field">
+              <label htmlFor="contribution-platform">Platform</label>
+              <select id="contribution-platform" value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
+                <option value="">No platform</option>
+                {platformChoices.map((platform) => (
+                  <option key={platform} value={platform}>{platform}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field field-span"><label htmlFor="contribution-notes">Notes</label><textarea id="contribution-notes" value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <div className="field" style={{ gridColumn: "1 / -1" }}><label>Notes</label><textarea value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
-        </div>
-        {error && <small style={{ color: "#ff6b6b" }}>{error}</small>}
-        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
-          <button className="btn" onClick={submit}>Save Contribution</button>
-        </div>
+          {error && <small className="field-error">{error}</small>}
+          <div className="form-actions">
+            <button className="btn" type="submit" disabled={isSaving}>{isSaving ? "Saving" : "Save Contribution"}</button>
+          </div>
+        </form>
       </div>
     </div>
   );

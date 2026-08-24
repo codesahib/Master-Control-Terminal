@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -65,7 +65,25 @@ class Instrument(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     symbol: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    provider_symbol: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    exchange: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    asset_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+
+
+class MarketPrice(Base):
+    __tablename__ = "market_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id", ondelete="CASCADE"), index=True)
+    price: Mapped[float] = mapped_column(Numeric(14, 4))
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), default="yfinance")
+    priced_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class ContributionLimit(Base):

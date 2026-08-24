@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -11,6 +11,7 @@ class TransactionCreate(BaseModel):
     transaction_date: date
     account_name: Optional[str] = None
     platform_name: Optional[str] = None
+    instrument_id: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
     broad_category: Optional[str] = None
@@ -32,7 +33,7 @@ class TransactionCreate(BaseModel):
             TransactionType.investment_sell,
             TransactionType.dividend_reinvestment,
             TransactionType.quantity_adjustment,
-        } and not self.symbol:
+        } and not self.symbol and not self.instrument_id:
             raise ValueError("symbol is required for investment and dividend transactions")
         if self.transaction_type in {
             TransactionType.investment_buy,
@@ -53,6 +54,7 @@ class TransactionCreate(BaseModel):
             or not self.source_currency
             or self.source_currency == self.currency
             or self.symbol
+            or self.instrument_id
             or self.quantity is not None
         ):
             raise ValueError("currency exchanges require different source and destination currencies with positive amounts")
@@ -87,6 +89,7 @@ class AccountTransactionCreate(BaseModel):
     account_name: str = Field(min_length=1)
     platform_name: str = Field(min_length=1)
     source_platform_name: Optional[str] = None
+    instrument_id: Optional[int] = Field(default=None, gt=0)
     symbol: Optional[str] = None
     instrument_name: Optional[str] = None
     broad_category: Optional[str] = None
@@ -117,11 +120,12 @@ class AccountTransactionCreate(BaseModel):
         if len({source.platform_name.lower() for source in self.funding_cash_sources}) != len(self.funding_cash_sources):
             raise ValueError("funding cash sources must be unique")
         if self.transaction_type == TransactionType.dividend_reinvestment and (
-            not self.symbol or self.quantity is None or self.quantity <= 0 or self.amount <= 0
+            (not self.symbol and not self.instrument_id) or self.quantity is None or self.quantity <= 0 or self.amount <= 0
         ):
             raise ValueError("dividend reinvestments require a symbol, positive quantity, and positive amount")
         if self.transaction_type == TransactionType.quantity_adjustment and (
             not self.symbol
+            and not self.instrument_id
             or self.quantity is None
             or self.quantity == 0
             or self.amount != 0
@@ -138,6 +142,7 @@ class AccountTransactionCreate(BaseModel):
             or not self.source_currency
             or self.source_currency == self.currency
             or self.symbol
+            or self.instrument_id
             or self.quantity is not None
             or self.contribution_id
             or self.funding_contributions
@@ -154,6 +159,7 @@ class TransactionRead(BaseModel):
     account_name: Optional[str]
     platform_name: Optional[str]
     source_platform_name: Optional[str] = None
+    instrument_id: Optional[int] = None
     symbol: Optional[str]
     broad_category: Optional[str]
     precise_category: Optional[str]
@@ -193,6 +199,7 @@ class AccountTransactionRead(BaseModel):
     account_name: Optional[str]
     platform_name: Optional[str]
     source_platform_name: Optional[str] = None
+    instrument_id: Optional[int] = None
     symbol: Optional[str]
     broad_category: Optional[str]
     precise_category: Optional[str]
@@ -227,6 +234,7 @@ class HoldingRead(BaseModel):
     as_of_date: date
     account_name: str
     platform_name: Optional[str]
+    instrument_id: Optional[int] = None
     symbol: str
     broad_category: Optional[str]
     precise_category: Optional[str]
@@ -234,6 +242,8 @@ class HoldingRead(BaseModel):
     quantity: Optional[float]
     book_value: float
     currency: str
+    average_price: Optional[float] = None
+    children: list["HoldingRead"] = Field(default_factory=list)
 
 
 class ContributionRoomRead(BaseModel):
@@ -265,6 +275,61 @@ class TimeSeriesPoint(BaseModel):
     month: str
     contributions: float
     investments: float
+
+
+class SymbolRead(BaseModel):
+    id: int
+    symbol: str
+    provider_symbol: str
+    name: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+    asset_type: Optional[str] = None
+    provider: str
+
+
+class MarketPriceRefreshResult(BaseModel):
+    instrument_id: int
+    symbol: str
+    provider_symbol: str
+    status: str
+    price: Optional[float] = None
+    currency: Optional[str] = None
+    priced_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
+class PortfolioPLRow(BaseModel):
+    id: str
+    as_of_date: date
+    account_name: str
+    platform_name: Optional[str]
+    instrument_id: Optional[int] = None
+    symbol: str
+    provider_symbol: Optional[str] = None
+    name: Optional[str] = None
+    broad_category: Optional[str]
+    precise_category: Optional[str]
+    record_type: str
+    quantity: Optional[float]
+    book_value: float
+    currency: str
+    average_price: Optional[float] = None
+    current_price: Optional[float] = None
+    price_currency: Optional[str] = None
+    priced_at: Optional[datetime] = None
+    market_value: Optional[float] = None
+    unrealized_pl: Optional[float] = None
+    unrealized_pl_pct: Optional[float] = None
+    price_status: str
+    children: list["PortfolioPLRow"] = Field(default_factory=list)
+
+
+class PaginatedPortfolioPLRead(BaseModel):
+    items: list[PortfolioPLRow]
+    total: int
+    page: int
+    page_size: int
 
 
 class ImportPreviewRow(BaseModel):

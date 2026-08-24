@@ -25,6 +25,7 @@ export interface Contribution extends ActivityRecord {}
 export interface AccountTransaction extends ActivityRecord {
   transaction_type: AccountTransactionType;
   source_platform_name?: string;
+  instrument_id?: number;
   symbol?: string;
   broad_category?: string;
   precise_category?: string;
@@ -60,6 +61,7 @@ export interface Holding {
   as_of_date: string;
   account_name: string;
   platform_name?: string;
+  instrument_id?: number;
   symbol: string;
   broad_category?: string;
   precise_category?: string;
@@ -67,6 +69,8 @@ export interface Holding {
   quantity?: number;
   book_value: number;
   currency: string;
+  average_price?: number;
+  children?: Holding[];
 }
 
 export type Transaction = Omit<AccountTransaction, "transaction_type"> & {
@@ -82,6 +86,13 @@ export interface PaginatedTransactions {
 
 export interface PaginatedAccountTransactions {
   items: AccountTransaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PaginatedPortfolioPL {
+  items: PortfolioPLRow[];
   total: number;
   page: number;
   page_size: number;
@@ -106,4 +117,28 @@ export interface ContributionLimitSetting {
   unused_room: number;
   new_room: number;
   total_room: number;
+}
+
+export interface SymbolSearchResult {
+  id: number;
+  symbol: string;
+  provider_symbol: string;
+  name?: string;
+  exchange?: string;
+  currency?: string;
+  asset_type?: string;
+  provider: string;
+}
+
+export interface PortfolioPLRow extends Holding {
+  provider_symbol?: string;
+  name?: string;
+  current_price?: number;
+  price_currency?: string;
+  priced_at?: string;
+  market_value?: number;
+  unrealized_pl?: number;
+  unrealized_pl_pct?: number;
+  price_status: string;
+  children?: PortfolioPLRow[];
 }
