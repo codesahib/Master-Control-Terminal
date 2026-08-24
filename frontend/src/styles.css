@@ -415,15 +415,23 @@ tr:hover td {
   padding-left: 24px;
 }
 
+.expand-cell {
+  width: 40px;
+  min-width: 40px;
+  text-align: right;
+}
+
 .expand-button {
-  margin-right: 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 3px 7px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 0.78rem;
+  line-height: 1;
   cursor: pointer;
 }
 

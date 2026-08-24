@@ -387,7 +387,7 @@ function App() {
   const investableCash = portfolioPlanningRows.filter((row) => row.record_type === "cash" && row.book_value > 0);
   const allocationRows = Object.values(
     portfolioPlanningRows.reduce<Record<string, { label: string; value: number }>>((totals, row) => {
-      const value = row.market_value ?? row.book_value;
+      const value = row.market_value_reporting ?? row.book_value_reporting ?? row.market_value ?? row.book_value;
       if (!value) return totals;
       const label = row.precise_category || row.broad_category || "Uncategorized";
       totals[label] = totals[label] || { label, value: 0 };
@@ -405,13 +405,16 @@ function App() {
           book: sum.book + row.book_value,
           market: sum.market + (row.market_value ?? 0),
           pl: sum.pl + (row.unrealized_pl ?? 0),
+          bookReporting: sum.bookReporting + (row.book_value_reporting ?? 0),
+          marketReporting: sum.marketReporting + (row.market_value_reporting ?? 0),
+          plReporting: sum.plReporting + (row.unrealized_pl_reporting ?? 0),
         }),
-        { book: 0, market: 0, pl: 0 }
+        { book: 0, market: 0, pl: 0, bookReporting: 0, marketReporting: 0, plReporting: 0 }
       );
     return {
       account: accountName,
       ...totals,
-      plPct: totals.book ? (totals.pl / totals.book) * 100 : null,
+      plPct: totals.bookReporting ? (totals.plReporting / totals.bookReporting) * 100 : null,
     };
   });
   const loadingOverlay = isLoading && (
@@ -576,6 +579,7 @@ function App() {
                   <th>Currency</th>
                   <th>Category</th>
                   <th>As Of</th>
+                  <th aria-label="Expand row"></th>
                 </tr>
               </thead>
               <tbody>
@@ -586,11 +590,6 @@ function App() {
                   return [
                     <tr key={holding.id} className="group-row">
                       <td data-label="Symbol">
-                        {canExpand && (
-                          <button className="expand-button" type="button" onClick={() => toggleExpanded(holding.id, setExpandedHoldings)}>
-                            {isExpanded ? "Hide" : "Show"}
-                          </button>
-                        )}
                         <strong>{holding.symbol}</strong>
                       </td>
                       <td data-label="Quantity">{holding.quantity ?? "-"}</td>
@@ -599,6 +598,13 @@ function App() {
                       <td data-label="Currency">{holding.currency}</td>
                       <td data-label="Category">{holding.precise_category || holding.broad_category || "-"}</td>
                       <td data-label="As Of">{holding.as_of_date}</td>
+                      <td className="expand-cell" data-label="Expand">
+                        {canExpand && (
+                          <button className="expand-button" type="button" aria-label={isExpanded ? "Collapse row" : "Expand row"} onClick={() => toggleExpanded(holding.id, setExpandedHoldings)}>
+                            {isExpanded ? "▼" : "▶"}
+                          </button>
+                        )}
+                      </td>
                     </tr>,
                     ...(canExpand && isExpanded ? childRows.map((child) => (
                       <tr key={child.id} className="sub-row">
@@ -609,12 +615,13 @@ function App() {
                         <td data-label="Currency">{child.currency}</td>
                         <td data-label="Category">{child.precise_category || child.broad_category || "-"}</td>
                         <td data-label="As Of">{child.as_of_date}</td>
+                        <td></td>
                       </tr>
                     )) : []),
                   ];
                 })}
                 {accountHoldings.length === 0 && (
-                  <tr><td className="empty-state" colSpan={7}>No holdings derived for this account/year.</td></tr>
+                  <tr><td className="empty-state" colSpan={8}>No holdings derived for this account/year.</td></tr>
                 )}
               </tbody>
             </table>
@@ -729,7 +736,7 @@ function App() {
         <div className="panel table-wrap">
           <div className="table-header">
             <h3>Account P/L</h3>
-            <small>Only holdings with current prices</small>
+            <small>Only status=ok holdings; totals converted to CAD</small>
           </div>
           <table>
             <thead>
@@ -745,9 +752,9 @@ function App() {
               {accountPLRows.map((row) => (
                 <tr key={row.account}>
                   <td data-label="Account">{row.account}</td>
-                  <td data-label="Book">{row.book.toFixed(2)}</td>
-                  <td data-label="Market">{row.market.toFixed(2)}</td>
-                  <td data-label="P/L" className={row.pl < 0 ? "negative" : "positive"}>{row.pl.toFixed(2)}</td>
+                  <td data-label="Book">{row.bookReporting.toFixed(2)} CAD</td>
+                  <td data-label="Market">{row.marketReporting.toFixed(2)} CAD</td>
+                  <td data-label="P/L" className={row.plReporting < 0 ? "negative" : "positive"}>{row.plReporting.toFixed(2)} CAD</td>
                   <td data-label="P/L %">{row.plPct !== null ? `${row.plPct.toFixed(2)}%` : "-"}</td>
                 </tr>
               ))}
@@ -788,6 +795,7 @@ function App() {
                 <th>P/L</th>
                 <th>P/L %</th>
                 <th>Status</th>
+                <th aria-label="Expand row"></th>
               </tr>
             </thead>
             <tbody>
@@ -799,11 +807,6 @@ function App() {
                   <tr key={row.id} className="group-row">
                     <td data-label="Account">{row.account_name}</td>
                     <td data-label="Symbol">
-                      {canExpand && (
-                        <button className="expand-button" type="button" onClick={() => toggleExpanded(row.id, setExpandedPortfolioPL)}>
-                          {isExpanded ? "Hide" : "Show"}
-                        </button>
-                      )}
                       <strong>{row.provider_symbol || row.symbol}</strong><br /><small>{row.name || row.symbol}</small>
                     </td>
                     <td data-label="Qty">{row.quantity ?? "-"}</td>
@@ -814,6 +817,13 @@ function App() {
                     <td data-label="P/L" className={(row.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{row.unrealized_pl !== undefined && row.unrealized_pl !== null ? row.unrealized_pl.toFixed(2) : "-"}</td>
                     <td data-label="P/L %">{row.unrealized_pl_pct !== undefined && row.unrealized_pl_pct !== null ? `${row.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
                     <td data-label="Status">{renderPLStatus(row)}</td>
+                    <td className="expand-cell" data-label="Expand">
+                      {canExpand && (
+                        <button className="expand-button" type="button" aria-label={isExpanded ? "Collapse row" : "Expand row"} onClick={() => toggleExpanded(row.id, setExpandedPortfolioPL)}>
+                          {isExpanded ? "▼" : "▶"}
+                        </button>
+                      )}
+                    </td>
                   </tr>,
                   ...(canExpand && isExpanded ? childRows.map((child) => (
                     <tr key={child.id} className="sub-row">
@@ -827,12 +837,13 @@ function App() {
                       <td data-label="P/L" className={(child.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{child.unrealized_pl !== undefined && child.unrealized_pl !== null ? child.unrealized_pl.toFixed(2) : "-"}</td>
                       <td data-label="P/L %">{child.unrealized_pl_pct !== undefined && child.unrealized_pl_pct !== null ? `${child.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
                       <td data-label="Status">{renderPLStatus(child)}</td>
+                      <td></td>
                     </tr>
                   )) : []),
                 ];
               })}
               {portfolioPL.length === 0 && (
-                <tr><td className="empty-state" colSpan={10}>No holdings available for P/L.</td></tr>
+                <tr><td className="empty-state" colSpan={11}>No holdings available for P/L.</td></tr>
               )}
             </tbody>
           </table>

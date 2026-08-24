@@ -243,6 +243,11 @@ def fetch_price(provider_symbol: str) -> tuple[float, str | None, datetime]:
     return float(price), currency, datetime.utcnow()
 
 
+def fetch_usd_cad_rate() -> float:
+    price, _currency, _priced_at = fetch_price("CAD=X")
+    return float(price)
+
+
 def _fast_value(fast_info: Any, key: str):
     if not fast_info:
         return None

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -377,3 +377,47 @@ def test_holdings_and_pl_group_symbol_with_platform_children():
         assert pl["market_value"] == 350
         assert pl["unrealized_pl"] == 70
         assert pl["unrealized_pl_pct"] == 25
+
+
+def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        platform = Platform(canonical_name="Questrade")
+        instrument = Instrument(symbol="NVDA", provider_symbol="NVDA", currency="USD")
+        db.add_all([account, platform, instrument])
+        db.flush()
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    amount=100,
+                    currency="USD",
+                    quantity=1,
+                ),
+                MarketPrice(
+                    instrument_id=instrument.id,
+                    price=125,
+                    currency="USD",
+                    priced_at=datetime.utcnow(),
+                ),
+            ]
+        )
+        db.commit()
+        monkeypatch.setattr("app.services.finance.fetch_usd_cad_rate", lambda: 1.35)
+
+        row = portfolio_pl(db, status="ok")[0]
+
+        assert row["book_value"] == 100
+        assert row["market_value"] == 125
+        assert row["unrealized_pl"] == 25
+        assert row["book_value_reporting"] == 135
+        assert row["market_value_reporting"] == 168.75
+        assert row["unrealized_pl_reporting"] == 33.75

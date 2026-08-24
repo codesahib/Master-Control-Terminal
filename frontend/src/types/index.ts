@@ -139,6 +139,11 @@ export interface PortfolioPLRow extends Holding {
   market_value?: number;
   unrealized_pl?: number;
   unrealized_pl_pct?: number;
+  reporting_currency: string;
+  fx_rate_to_reporting?: number;
+  book_value_reporting?: number;
+  market_value_reporting?: number;
+  unrealized_pl_reporting?: number;
   price_status: string;
   manual_valuation_date?: string;
   children?: PortfolioPLRow[];

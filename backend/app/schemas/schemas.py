@@ -335,6 +335,11 @@ class PortfolioPLRow(BaseModel):
     market_value: Optional[float] = None
     unrealized_pl: Optional[float] = None
     unrealized_pl_pct: Optional[float] = None
+    reporting_currency: str = "CAD"
+    fx_rate_to_reporting: Optional[float] = None
+    book_value_reporting: Optional[float] = None
+    market_value_reporting: Optional[float] = None
+    unrealized_pl_reporting: Optional[float] = None
     price_status: str
     manual_valuation_date: Optional[date] = None
     children: list["PortfolioPLRow"] = Field(default_factory=list)

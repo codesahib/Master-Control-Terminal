@@ -22,7 +22,7 @@ from app.models.models import (
     TransactionType,
 )
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
-from app.services.market_data import latest_prices
+from app.services.market_data import fetch_usd_cad_rate, latest_prices
 
 TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
@@ -913,6 +913,7 @@ def portfolio_pl(db: Session, account=None, year=None, platform=None, status=Non
 def _portfolio_pl_rows(db: Session, account=None, year=None):
     prices = latest_prices(db)
     manual_values = _latest_manual_values(db)
+    usd_cad_rate = _usd_cad_rate()
     rows = []
     for holding in list_holdings(db, account=account, year=year):
         row = dict(holding)
@@ -963,8 +964,34 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
             row["unrealized_pl"] = unrealized_pl
             row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
             row["price_status"] = "stale" if price.priced_at < datetime.utcnow() - timedelta(hours=24) else "ok"
+        _add_reporting_values(row, usd_cad_rate)
         rows.append(row)
     return rows
+
+
+def _usd_cad_rate():
+    try:
+        return fetch_usd_cad_rate()
+    except Exception:
+        return None
+
+
+def _to_cad(value, currency: str | None, usd_cad_rate: float | None):
+    if value is None:
+        return None
+    if currency == "CAD":
+        return round(float(value), 2)
+    if currency == "USD" and usd_cad_rate:
+        return round(float(value) * usd_cad_rate, 2)
+    return None
+
+
+def _add_reporting_values(row: dict, usd_cad_rate: float | None):
+    row["reporting_currency"] = "CAD"
+    row["fx_rate_to_reporting"] = 1.0 if row["currency"] == "CAD" else (usd_cad_rate if row["currency"] == "USD" else None)
+    row["book_value_reporting"] = _to_cad(row.get("book_value"), row.get("currency"), usd_cad_rate)
+    row["market_value_reporting"] = _to_cad(row.get("market_value"), row.get("currency"), usd_cad_rate)
+    row["unrealized_pl_reporting"] = _to_cad(row.get("unrealized_pl"), row.get("currency"), usd_cad_rate)
 
 
 def _latest_manual_values(db: Session):
@@ -1012,6 +1039,13 @@ def _group_pl_rows(rows: list[dict]):
         )
         group["market_value"] = round(sum(market_values), 2) if market_values else None
         group["unrealized_pl"] = round(sum(unrealized_values), 2) if unrealized_values else None
+        group["reporting_currency"] = "CAD"
+        group["fx_rate_to_reporting"] = children[0].get("fx_rate_to_reporting") if len({row.get("fx_rate_to_reporting") for row in children}) == 1 else None
+        group["book_value_reporting"] = round(sum(float(row["book_value_reporting"]) for row in children if row.get("book_value_reporting") is not None), 2)
+        reporting_market_values = [float(row["market_value_reporting"]) for row in children if row.get("market_value_reporting") is not None]
+        reporting_pl_values = [float(row["unrealized_pl_reporting"]) for row in children if row.get("unrealized_pl_reporting") is not None]
+        group["market_value_reporting"] = round(sum(reporting_market_values), 2) if reporting_market_values else None
+        group["unrealized_pl_reporting"] = round(sum(reporting_pl_values), 2) if reporting_pl_values else None
         group["unrealized_pl_pct"] = (
             round(float(group["unrealized_pl"]) / float(group["book_value"]) * 100, 2)
             if group.get("unrealized_pl") is not None and group["book_value"]
