@@ -705,7 +705,11 @@ def list_holdings(db: Session, account=None, year=None):
 
         amount = float(txn.amount)
         if txn.transaction_type == TransactionType.investment_buy:
-            adjust_cash(account_row, platform, currency, -amount)
+            cash_currency = txn.source_currency or currency
+            cash_amount = float(txn.source_amount if txn.source_amount is not None else txn.amount)
+            adjust_cash(account_row, platform, cash_currency, -cash_amount)
+        elif txn.transaction_type == TransactionType.dividend_reinvestment and txn.source_amount is not None:
+            adjust_cash(account_row, platform, txn.source_currency or currency, -float(txn.source_amount))
         elif txn.transaction_type == TransactionType.investment_sell:
             adjust_cash(account_row, platform, currency, amount)
         adjust_cash(account_row, platform, fee_currency, -fees)
@@ -721,6 +725,7 @@ def list_holdings(db: Session, account=None, year=None):
                 "symbol": instrument.symbol if instrument else "Unspecified",
                 "provider_symbol": instrument.provider_symbol if instrument else None,
                 "name": instrument.name if instrument else None,
+                "category_id": None,
                 "broad_category": None,
                 "precise_category": None,
                 "quantity": 0.0,
@@ -729,6 +734,7 @@ def list_holdings(db: Session, account=None, year=None):
             },
         )
         if category:
+            position["category_id"] = category.id
             position["broad_category"] = category.broad
             position["precise_category"] = category.precise
 
@@ -760,6 +766,9 @@ def list_holdings(db: Session, account=None, year=None):
                 {
                     "id": f"cash:{account_id}:{platform_id or 0}:{currency}",
                     "as_of_date": as_of_date,
+                    "account_id": account_id,
+                    "platform_id": platform_id,
+                    "category_id": None,
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
                     "instrument_id": None,
@@ -778,6 +787,9 @@ def list_holdings(db: Session, account=None, year=None):
                 {
                     "id": f"holding:{account_id}:{platform_id or 0}:{instrument_id or 0}:{currency}",
                     "as_of_date": as_of_date,
+                    "account_id": account_id,
+                    "platform_id": platform_id,
+                    "category_id": row["category_id"],
                     "account_name": row["account_name"],
                     "platform_name": row["platform_name"],
                     "instrument_id": row["instrument_id"],
@@ -851,6 +863,7 @@ def portfolio_pl(db: Session, account=None, year=None, platform=None, status=Non
 
 def _portfolio_pl_rows(db: Session, account=None, year=None):
     prices = latest_prices(db)
+    manual_values = _latest_manual_values(db)
     rows = []
     for holding in list_holdings(db, account=account, year=year):
         row = dict(holding)
@@ -861,6 +874,7 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
         row["current_price"] = float(price.price) if price else None
         row["price_currency"] = price.currency if price else None
         row["priced_at"] = price.priced_at if price else None
+        row["manual_valuation_date"] = None
         row["provider_symbol"] = row.get("provider_symbol")
         row["name"] = row.get("name")
         if row["record_type"] == "cash":
@@ -869,10 +883,20 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
             row["unrealized_pl_pct"] = 0.0
             row["price_status"] = "cash"
         elif row["quantity"] is None:
-            row["market_value"] = None
-            row["unrealized_pl"] = None
-            row["unrealized_pl_pct"] = None
-            row["price_status"] = "missing_quantity"
+            manual_value = _manual_value_for_holding(manual_values, row)
+            if manual_value:
+                market_value = round(float(manual_value["market_value"]), 2)
+                unrealized_pl = round(market_value - float(row["book_value"]), 2)
+                row["market_value"] = market_value
+                row["unrealized_pl"] = unrealized_pl
+                row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
+                row["manual_valuation_date"] = manual_value["snapshot_date"]
+                row["price_status"] = "ok"
+            else:
+                row["market_value"] = None
+                row["unrealized_pl"] = None
+                row["unrealized_pl_pct"] = None
+                row["price_status"] = "missing_quantity"
         elif not price:
             row["market_value"] = None
             row["unrealized_pl"] = None
@@ -894,6 +918,35 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
     return rows
 
 
+def _latest_manual_values(db: Session):
+    rows = {}
+    q = select(HoldingSnapshot).order_by(HoldingSnapshot.snapshot_date, HoldingSnapshot.id)
+    for snapshot in db.scalars(q):
+        key = (
+            snapshot.account_id,
+            snapshot.platform_id,
+            snapshot.instrument_id,
+            snapshot.category_id,
+            snapshot.record_type,
+        )
+        rows[key] = {
+            "market_value": snapshot.market_value,
+            "snapshot_date": snapshot.snapshot_date,
+        }
+    return rows
+
+
+def _manual_value_for_holding(manual_values: dict, row: dict):
+    keys = [
+        (row.get("account_id"), row.get("platform_id"), row.get("instrument_id"), row.get("category_id"), row["record_type"]),
+        (row.get("account_id"), None, row.get("instrument_id"), row.get("category_id"), row["record_type"]),
+    ]
+    for key in keys:
+        if key in manual_values:
+            return manual_values[key]
+    return None
+
+
 def _group_pl_rows(rows: list[dict]):
     grouped = _group_holding_rows(rows)
     for group in grouped:
@@ -904,6 +957,10 @@ def _group_pl_rows(rows: list[dict]):
         group["current_price"] = children[0].get("current_price") if len({row.get("current_price") for row in children}) == 1 else None
         group["price_currency"] = children[0].get("price_currency") if len({row.get("price_currency") for row in children}) == 1 else None
         group["priced_at"] = max((row["priced_at"] for row in children if row.get("priced_at")), default=None)
+        group["manual_valuation_date"] = max(
+            (row["manual_valuation_date"] for row in children if row.get("manual_valuation_date")),
+            default=None,
+        )
         group["market_value"] = round(sum(market_values), 2) if market_values else None
         group["unrealized_pl"] = round(sum(unrealized_values), 2) if unrealized_values else None
         group["unrealized_pl_pct"] = (

@@ -162,6 +162,138 @@ def test_currency_exchange_keeps_cash_and_positions_in_their_native_currency():
         assert position["book_value"] == 600
 
 
+def test_cross_currency_buy_uses_source_cash_and_holding_currency():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        platform = Platform(canonical_name="Wealthsimple")
+        instrument = Instrument(symbol="GOOG")
+        db.add_all([account, platform, instrument])
+        db.flush()
+        db.add(
+            Transaction(
+                transaction_type=TransactionType.investment_buy,
+                transaction_date=date(2026, 1, 1),
+                account_id=account.id,
+                platform_id=platform.id,
+                instrument_id=instrument.id,
+                amount=0.1573,
+                currency="USD",
+                source_amount=0.22,
+                source_currency="CAD",
+                quantity=0.0009,
+                fees=0,
+            )
+        )
+        db.commit()
+
+        holdings = list_holdings(db, account="TFSA", year=2026)
+        cash = next(row for row in holdings if row["record_type"] == "cash")
+        position = next(row for row in holdings if row["symbol"] == "GOOG")
+
+        assert cash["currency"] == "CAD"
+        assert cash["book_value"] == -0.22
+        assert position["currency"] == "USD"
+        assert position["book_value"] == 0.1573
+
+
+def test_cross_currency_dividend_reinvestment_consumes_source_cash():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        platform = Platform(canonical_name="Wealthsimple")
+        instrument = Instrument(symbol="GOOG")
+        db.add_all([account, platform, instrument])
+        db.flush()
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.dividend_interest,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    amount=0.22,
+                    currency="CAD",
+                    fees=0,
+                ),
+                Transaction(
+                    transaction_type=TransactionType.dividend_reinvestment,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    amount=0.1573,
+                    currency="USD",
+                    source_amount=0.22,
+                    source_currency="CAD",
+                    quantity=0.0009,
+                    fees=0,
+                ),
+            ]
+        )
+        db.commit()
+
+        holdings = list_holdings(db, account="TFSA", year=2026)
+        position = next(row for row in holdings if row["symbol"] == "GOOG")
+
+        assert not [row for row in holdings if row["record_type"] == "cash"]
+        assert position["currency"] == "USD"
+        assert position["book_value"] == 0.1573
+
+
+def test_portfolio_pl_uses_manual_snapshot_for_holdings_without_quantity():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="FHSA")
+        platform = Platform(canonical_name="EQ Bank")
+        category = Category(broad="Bond", precise="GIC")
+        instrument = Instrument(symbol="GIC", currency="CAD")
+        db.add_all([account, platform, category, instrument])
+        db.flush()
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    category_id=category.id,
+                    amount=3000,
+                    currency="CAD",
+                    fees=0,
+                ),
+                HoldingSnapshot(
+                    snapshot_date=date(2026, 8, 24),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    category_id=category.id,
+                    market_value=3043.89,
+                ),
+            ]
+        )
+        db.commit()
+
+        row = portfolio_pl(db, status="ok")[0]
+
+        assert row["symbol"] == "GIC"
+        assert row["quantity"] is None
+        assert row["market_value"] == 3043.89
+        assert row["unrealized_pl"] == 43.89
+        assert row["manual_valuation_date"] == date(2026, 8, 24)
+
+
 def test_holdings_and_pl_group_symbol_with_platform_children():
     engine = create_engine("sqlite:///:memory:", future=True)
     Session = sessionmaker(bind=engine, future=True)

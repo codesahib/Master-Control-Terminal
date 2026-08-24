@@ -322,6 +322,7 @@ class PortfolioPLRow(BaseModel):
     unrealized_pl: Optional[float] = None
     unrealized_pl_pct: Optional[float] = None
     price_status: str
+    manual_valuation_date: Optional[date] = None
     children: list["PortfolioPLRow"] = Field(default_factory=list)
 
 

@@ -793,7 +793,10 @@ function App() {
                     <td data-label="Market">{row.market_value ? `${row.market_value.toFixed(2)} ${row.currency}` : "-"}</td>
                     <td data-label="P/L" className={(row.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{row.unrealized_pl !== undefined && row.unrealized_pl !== null ? row.unrealized_pl.toFixed(2) : "-"}</td>
                     <td data-label="P/L %">{row.unrealized_pl_pct !== undefined && row.unrealized_pl_pct !== null ? `${row.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
-                    <td data-label="Status">{row.price_status}</td>
+                    <td data-label="Status">
+                      {row.price_status}
+                      {row.manual_valuation_date && <><br /><small>Manual value updated {row.manual_valuation_date}</small></>}
+                    </td>
                   </tr>,
                   ...(canExpand && isExpanded ? childRows.map((child) => (
                     <tr key={child.id} className="sub-row">
@@ -806,7 +809,10 @@ function App() {
                       <td data-label="Market">{child.market_value ? `${child.market_value.toFixed(2)} ${child.currency}` : "-"}</td>
                       <td data-label="P/L" className={(child.unrealized_pl || 0) < 0 ? "negative" : "positive"}>{child.unrealized_pl !== undefined && child.unrealized_pl !== null ? child.unrealized_pl.toFixed(2) : "-"}</td>
                       <td data-label="P/L %">{child.unrealized_pl_pct !== undefined && child.unrealized_pl_pct !== null ? `${child.unrealized_pl_pct.toFixed(2)}%` : "-"}</td>
-                      <td data-label="Status">{child.price_status}</td>
+                      <td data-label="Status">
+                        {child.price_status}
+                        {child.manual_valuation_date && <><br /><small>Manual value updated {child.manual_valuation_date}</small></>}
+                      </td>
                     </tr>
                   )) : []),
                 ];
