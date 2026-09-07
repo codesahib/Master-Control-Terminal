@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from app.db.session import Base
 from app.models.models import (
     Account,
+    AuditLog,
     Category,
     ContributionLimit,
     HoldingSnapshot,
@@ -90,13 +91,16 @@ def test_export_includes_persisted_records():
 
         import_row = ImportRow(import_id=imp.id, row_number=1, payload_json=json.dumps({"amount": 500}), error=None)
         funding = TransactionFunding(transaction_id=investment.id, contribution_id=transaction.id, amount=100)
-        db.add_all([import_row, funding])
+        audit = AuditLog(operation="create", table_name="transactions", row_id="1")
+        db.add_all([import_row, funding, audit])
         db.commit()
 
         exported = export_all_data(db)
 
-        assert set(exported) == set(Base.metadata.tables)
-        assert all(set(exported[table.name][0]) == set(table.c.keys()) for table in Base.metadata.tables.values())
+        exported_tables = {name for name in Base.metadata.tables if name != "audit_logs"}
+        assert set(exported) == exported_tables
+        assert "audit_logs" not in exported
+        assert all(set(exported[table.name][0]) == set(table.c.keys()) for table in Base.metadata.tables.values() if table.name != "audit_logs")
         assert exported["accounts"][0]["name"] == "TFSA"
         assert exported["platforms"][0]["canonical_name"] == "Wealthsimple"
         assert exported["platform_aliases"][0]["alias"] == "ws"
@@ -188,3 +192,6 @@ def test_restore_replaces_existing_data():
         restore_all_data(target_db, payload)
 
         assert export_all_data(target_db) == source_data
+        audit = target_db.query(AuditLog).one()
+        assert audit.operation == "restore"
+        assert audit.table_name == "all"

@@ -1,5 +1,7 @@
 import json
 from datetime import date, datetime, timedelta
+from decimal import Decimal
+from enum import Enum
 
 from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, case, func, or_, select, text
 from sqlalchemy.orm import Session, aliased
@@ -7,6 +9,7 @@ from sqlalchemy.orm import Session, aliased
 from app.db.session import Base
 from app.models.models import (
     Account,
+    AuditLog,
     Category,
     ContributionLimit,
     HoldingSnapshot,
@@ -26,6 +29,7 @@ from app.services.market_data import fetch_usd_cad_rate, latest_prices
 
 TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
+BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs"}
 CATEGORY_OPTIONS = {
     "Cash": ["Cash"],
     "Bond": ["Bond", "GIC", "Money Market"],
@@ -47,7 +51,67 @@ CATEGORY_OPTIONS = {
 
 
 def _backup_tables():
-    return Base.metadata.sorted_tables
+    return [table for table in Base.metadata.sorted_tables if table.name not in BACKUP_EXCLUDED_TABLE_NAMES]
+
+
+def _dump_json(value):
+    return json.dumps(value, sort_keys=True) if value is not None else None
+
+
+def _audit_value(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _row_payload(row, extra: dict | None = None) -> dict:
+    payload = {column.name: _audit_value(getattr(row, column.name)) for column in row.__table__.columns}
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _funding_payload(db: Session, transaction_id: int):
+    return [
+        _row_payload(funding)
+        for funding in db.scalars(
+            select(TransactionFunding)
+            .where(TransactionFunding.transaction_id == transaction_id)
+            .order_by(TransactionFunding.id)
+        )
+    ]
+
+
+def _transaction_payload(db: Session, txn: Transaction) -> dict:
+    return _row_payload(txn, {"funding_contributions": _funding_payload(db, txn.id)})
+
+
+def log_audit(
+    db: Session,
+    operation: str,
+    table_name: str,
+    *,
+    row_id=None,
+    summary: str | None = None,
+    before=None,
+    after=None,
+    source: str | None = None,
+) -> None:
+    db.add(
+        AuditLog(
+            operation=operation,
+            table_name=table_name,
+            row_id=str(row_id) if row_id is not None else None,
+            summary=summary,
+            before_json=_dump_json(before),
+            after_json=_dump_json(after),
+            source=source,
+        )
+    )
 
 
 def _rows_for_export(db: Session, table):
@@ -236,6 +300,7 @@ def upsert_manual_valuation(db: Session, payload) -> HoldingSnapshot:
         )
         .order_by(HoldingSnapshot.snapshot_date.desc(), HoldingSnapshot.id.desc())
     )
+    before = _row_payload(snapshot) if snapshot else None
     if not snapshot:
         snapshot = HoldingSnapshot(record_type="holding")
         db.add(snapshot)
@@ -245,6 +310,17 @@ def upsert_manual_valuation(db: Session, payload) -> HoldingSnapshot:
     snapshot.instrument_id = instrument.id if instrument else None
     snapshot.category_id = category.id if category else None
     snapshot.market_value = payload.market_value
+    db.flush()
+    log_audit(
+        db,
+        "update" if before else "create",
+        "holdings_snapshots",
+        row_id=snapshot.id,
+        summary="Manual valuation saved",
+        before=before,
+        after=_row_payload(snapshot),
+        source="manual-valuations",
+    )
     db.commit()
     db.refresh(snapshot)
     return snapshot
@@ -276,6 +352,7 @@ def _save_transaction(
     txn: Transaction | None = None,
     transaction_type: TransactionType | None = None,
 ) -> Transaction:
+    before = _transaction_payload(db, txn) if txn else None
     account = get_or_create_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
     source_platform = normalize_platform(db, getattr(payload, "source_platform_name", None))
@@ -317,6 +394,17 @@ def _save_transaction(
     db.flush()
     if isinstance(payload, AccountTransactionCreate):
         _replace_transaction_fundings(db, txn, payload)
+        db.flush()
+    log_audit(
+        db,
+        "update" if before else "create",
+        "transactions",
+        row_id=txn.id,
+        summary=f"{txn.transaction_type.value} transaction saved",
+        before=before,
+        after=_transaction_payload(db, txn),
+        source="transactions",
+    )
     db.commit()
     db.refresh(txn)
     return txn
@@ -1162,11 +1250,23 @@ def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new
             ContributionLimit.tax_year == tax_year,
         )
     )
+    before = _row_payload(limit) if limit else None
     if not limit:
         limit = ContributionLimit(account_id=account.id, tax_year=tax_year)
         db.add(limit)
 
     limit.new_room = new_room
+    db.flush()
+    log_audit(
+        db,
+        "update" if before else "create",
+        "contribution_limits",
+        row_id=limit.id,
+        summary=f"{account.name} {tax_year} contribution limit saved",
+        before=before,
+        after=_row_payload(limit),
+        source="contribution-limits",
+    )
     db.commit()
     return compute_contribution_limit_for_account(db, account, tax_year)
 
@@ -1234,6 +1334,7 @@ def restore_all_data(db: Session, payload: dict):
     for legacy_name, table_name in LEGACY_BACKUP_TABLE_NAMES.items():
         if legacy_name in data and table_name not in data:
             data[table_name] = data.pop(legacy_name)
+    data = {table_name: rows for table_name, rows in data.items() if table_name not in BACKUP_EXCLUDED_TABLE_NAMES}
 
     tables = _backup_tables()
     table_names = {table.name for table in tables}
@@ -1276,4 +1377,5 @@ def restore_all_data(db: Session, payload: dict):
 
     for table in tables:
         _reset_sequence(db, table)
+    log_audit(db, "restore", "all", summary="Backup restored", source="import-backup")
     db.commit()

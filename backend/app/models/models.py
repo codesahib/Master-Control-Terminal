@@ -162,3 +162,17 @@ class ImportRow(Base):
     row_number: Mapped[int] = mapped_column(Integer)
     payload_json: Mapped[str] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    operation: Mapped[str] = mapped_column(String(20), index=True)
+    table_name: Mapped[str] = mapped_column(String(100), index=True)
+    row_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    summary: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
