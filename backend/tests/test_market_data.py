@@ -5,8 +5,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.models import Account, Instrument, MarketPrice, Platform, Transaction, TransactionType
-from app.services.finance import portfolio_pl
 from app.services.market_data import refresh_market_prices, search_symbols
+from app.services.portfolio import portfolio_pl
 
 
 def test_symbol_search_persists_yfinance_results(monkeypatch):

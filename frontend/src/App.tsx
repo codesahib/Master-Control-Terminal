@@ -6,7 +6,7 @@ import { ContributionModal } from "./components/ContributionModal";
 import { DistributionChart } from "./components/DistributionChart";
 import { ManualValuationModal } from "./components/ManualValuationModal";
 import { TransactionTable } from "./components/TransactionTable";
-import { AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedPortfolioPL, PaginatedTransactions, PortfolioPLRow, Transaction, TransactionType } from "./types";
+import { AccountPLSummary, AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedPortfolioPL, PaginatedTransactions, PortfolioPLRow, PortfolioSummary, Transaction, TransactionType } from "./types";
 
 const ACCOUNT_NAMES = ["RRSP", "TFSA", "FHSA"];
 const PRICE_STATUSES = ["ok", "stale", "missing", "missing_quantity", "currency_mismatch", "cash"];
@@ -57,7 +57,9 @@ function App() {
   const [accountData, setAccountData] = useState<DistributionPoint[]>([]);
   const [platformData, setPlatformData] = useState<DistributionPoint[]>([]);
   const [portfolioPL, setPortfolioPL] = useState<PortfolioPLRow[]>([]);
-  const [portfolioPlanningRows, setPortfolioPlanningRows] = useState<PortfolioPLRow[]>([]);
+  const [investableCash, setInvestableCash] = useState<PortfolioPLRow[]>([]);
+  const [allocationRows, setAllocationRows] = useState<DistributionPoint[]>([]);
+  const [accountPLRows, setAccountPLRows] = useState<AccountPLSummary[]>([]);
   const [portfolioPLPage, setPortfolioPLPage] = useState(1);
   const [portfolioPLTotal, setPortfolioPLTotal] = useState(0);
   const [portfolioPLAccount, setPortfolioPLAccount] = useState("");
@@ -107,13 +109,13 @@ function App() {
         ...(portfolioPLPlatform ? { platform: portfolioPLPlatform } : {}),
         ...(portfolioPLStatus ? { status: portfolioPLStatus } : {}),
       };
-      const [tx, sector, account, platform, pl, planning, room] = await Promise.all([
+      const [tx, sector, account, platform, pl, summary, room] = await Promise.all([
         api.get<PaginatedTransactions>("/transactions", { params: historyParams }),
         api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "sector", category_level: categoryLevel, currency: globalCurrency, ...params } }),
         api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "account", currency: globalCurrency, ...params } }),
         api.get<DistributionPoint[]>("/analytics/distribution", { params: { group_by: "platform", currency: globalCurrency, ...params } }),
         api.get<PaginatedPortfolioPL>("/portfolio/pl", { params: plParams }),
-        api.get<PaginatedPortfolioPL>("/portfolio/pl", { params: { ...params, page: 1, page_size: 500 } }),
+        api.get<PortfolioSummary>("/portfolio/summary", { params }),
         fetchContributionRooms(globalYear),
       ]);
 
@@ -124,7 +126,9 @@ function App() {
       setPlatformData(platform.data);
       setPortfolioPL(pl.data.items);
       setPortfolioPLTotal(pl.data.total);
-      setPortfolioPlanningRows(planning.data.items);
+      setInvestableCash(summary.data.investable_cash);
+      setAllocationRows(summary.data.allocation);
+      setAccountPLRows(summary.data.account_pl);
       setLimits(room);
     } catch (error) {
       console.error(error);
@@ -384,39 +388,7 @@ function App() {
     ],
   };
   const selectedAccountLimit = accountLimits.find((limit) => limit.account === selectedAccount);
-  const investableCash = portfolioPlanningRows.filter((row) => row.record_type === "cash" && row.book_value > 0);
-  const allocationRows = Object.values(
-    portfolioPlanningRows.reduce<Record<string, { label: string; value: number }>>((totals, row) => {
-      const value = row.market_value_reporting ?? row.book_value_reporting ?? row.market_value ?? row.book_value;
-      if (!value) return totals;
-      const label = row.precise_category || row.broad_category || "Uncategorized";
-      totals[label] = totals[label] || { label, value: 0 };
-      totals[label].value += value;
-      return totals;
-    }, {})
-  ).sort((a, b) => b.value - a.value);
   const totalPortfolioValue = allocationRows.reduce((sum, row) => sum + row.value, 0);
-  const accountPLRows = ACCOUNT_NAMES.map((accountName) => {
-    const rows = portfolioPlanningRows.flatMap((row) => row.children?.length ? row.children : [row]);
-    const totals = rows
-      .filter((row) => row.account_name === accountName && row.price_status === "ok")
-      .reduce(
-        (sum, row) => ({
-          book: sum.book + row.book_value,
-          market: sum.market + (row.market_value ?? 0),
-          pl: sum.pl + (row.unrealized_pl ?? 0),
-          bookReporting: sum.bookReporting + (row.book_value_reporting ?? 0),
-          marketReporting: sum.marketReporting + (row.market_value_reporting ?? 0),
-          plReporting: sum.plReporting + (row.unrealized_pl_reporting ?? 0),
-        }),
-        { book: 0, market: 0, pl: 0, bookReporting: 0, marketReporting: 0, plReporting: 0 }
-      );
-    return {
-      account: accountName,
-      ...totals,
-      plPct: totals.bookReporting ? (totals.plReporting / totals.bookReporting) * 100 : null,
-    };
-  });
   const loadingOverlay = isLoading && (
     <div className="loading-overlay" role="status" aria-live="polite" aria-label="Loading">
       <span className="spinner" aria-hidden="true" />
@@ -755,7 +727,7 @@ function App() {
                   <td data-label="Book">{row.bookReporting.toFixed(2)} CAD</td>
                   <td data-label="Market">{row.marketReporting.toFixed(2)} CAD</td>
                   <td data-label="P/L" className={row.plReporting < 0 ? "negative" : "positive"}>{row.plReporting.toFixed(2)} CAD</td>
-                  <td data-label="P/L %">{row.plPct !== null ? `${row.plPct.toFixed(2)}%` : "-"}</td>
+                  <td data-label="P/L %">{row.plPct != null ? `${row.plPct.toFixed(2)}%` : "-"}</td>
                 </tr>
               ))}
             </tbody>

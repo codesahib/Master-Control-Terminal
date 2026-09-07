@@ -5,7 +5,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.models import Account, Category, HoldingSnapshot, Instrument, MarketPrice, Platform, Transaction, TransactionType
-from app.services.finance import create_account_transaction, distribution, grouped_holdings, portfolio_pl, list_holdings
+from app.services.finance import create_account_transaction
+from app.services.portfolio import distribution, grouped_holdings, list_holdings, portfolio_pl, portfolio_summary
 from app.schemas.schemas import AccountTransactionCreate
 
 
@@ -411,7 +412,7 @@ def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings(monkeypatch):
             ]
         )
         db.commit()
-        monkeypatch.setattr("app.services.finance.fetch_usd_cad_rate", lambda: 1.35)
+        monkeypatch.setattr("app.services.portfolio.fetch_usd_cad_rate", lambda: 1.35)
 
         row = portfolio_pl(db, status="ok")[0]
 
@@ -421,3 +422,58 @@ def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings(monkeypatch):
         assert row["book_value_reporting"] == 135
         assert row["market_value_reporting"] == 168.75
         assert row["unrealized_pl_reporting"] == 33.75
+
+
+def test_portfolio_summary_returns_dashboard_rollups():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="TFSA")
+        platform = Platform(canonical_name="Wealthsimple")
+        category = Category(broad="All Equity", precise="All Equity")
+        instrument = Instrument(symbol="XEQT")
+        db.add_all([account, platform, category, instrument])
+        db.flush()
+        db.add_all(
+            [
+                Transaction(
+                    transaction_type=TransactionType.contribution,
+                    transaction_date=date(2026, 1, 1),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    amount=150,
+                ),
+                Transaction(
+                    transaction_type=TransactionType.investment_buy,
+                    transaction_date=date(2026, 1, 2),
+                    account_id=account.id,
+                    platform_id=platform.id,
+                    instrument_id=instrument.id,
+                    category_id=category.id,
+                    amount=100,
+                    quantity=10,
+                    fees=0,
+                ),
+                MarketPrice(instrument_id=instrument.id, price=12, currency="CAD", priced_at=datetime.utcnow()),
+            ]
+        )
+        db.commit()
+
+        summary = portfolio_summary(db, year=2026)
+
+        assert summary["investable_cash"][0]["book_value"] == 50
+        assert {row["label"]: row["value"] for row in summary["allocation"]} == {"All Equity": 120, "Cash": 50}
+        assert summary["account_pl"] == [
+            {
+                "account": "TFSA",
+                "book": 100,
+                "market": 120,
+                "pl": 20,
+                "bookReporting": 100,
+                "marketReporting": 120,
+                "plReporting": 20,
+                "plPct": 20,
+            }
+        ]

@@ -98,6 +98,23 @@ export interface PaginatedPortfolioPL {
   page_size: number;
 }
 
+export interface AccountPLSummary {
+  account: string;
+  book: number;
+  market: number;
+  pl: number;
+  bookReporting: number;
+  marketReporting: number;
+  plReporting: number;
+  plPct?: number | null;
+}
+
+export interface PortfolioSummary {
+  investable_cash: PortfolioPLRow[];
+  allocation: DistributionPoint[];
+  account_pl: AccountPLSummary[];
+}
+
 export interface DistributionPoint {
   label: string;
   value: number;

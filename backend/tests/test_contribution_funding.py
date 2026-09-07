@@ -7,7 +7,8 @@ from sqlalchemy.orm import sessionmaker
 from app.db.session import Base
 from app.models.models import Account, Platform, TransactionFunding, TransactionType
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate
-from app.services.finance import create_account_transaction, create_contribution, list_available_contributions, list_holdings
+from app.services.finance import create_account_transaction, create_contribution, list_available_contributions
+from app.services.portfolio import list_holdings
 
 
 def test_contribution_can_fund_partial_and_full_investment_buys():

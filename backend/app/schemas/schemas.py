@@ -352,6 +352,23 @@ class PaginatedPortfolioPLRead(BaseModel):
     page_size: int
 
 
+class AccountPLSummary(BaseModel):
+    account: str
+    book: float
+    market: float
+    pl: float
+    bookReporting: float
+    marketReporting: float
+    plReporting: float
+    plPct: Optional[float] = None
+
+
+class PortfolioSummaryRead(BaseModel):
+    investable_cash: list[PortfolioPLRow]
+    allocation: list[DistributionPoint]
+    account_pl: list[AccountPLSummary]
+
+
 class ImportPreviewRow(BaseModel):
     row_number: int
     payload: dict

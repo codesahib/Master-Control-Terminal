@@ -30,6 +30,7 @@ from app.schemas.schemas import (
     ManualValuationUpsert,
     PaginatedTransactionRead,
     PaginatedPortfolioPLRead,
+    PortfolioSummaryRead,
     SymbolRead,
     TimeSeriesPoint,
     TransactionCreate,
@@ -40,21 +41,17 @@ from app.services.finance import (
     create_contribution,
     create_import_preview,
     create_transaction,
-    distribution,
     export_all_data,
     get_all_contribution_room,
     get_contribution_room,
-    grouped_holdings,
     list_account_transactions,
     list_available_contributions,
     list_contributions,
     list_contribution_limits,
     list_transaction_fundings,
     list_transactions,
-    portfolio_pl,
     restore_all_data,
     TRACKED_YEARS,
-    timeseries,
     upsert_manual_valuation,
     upsert_contribution_limit,
     update_account_transaction,
@@ -62,6 +59,7 @@ from app.services.finance import (
     update_transaction,
 )
 from app.services.market_data import refresh_market_prices, search_symbols
+from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, timeseries
 
 router = APIRouter()
 
@@ -120,6 +118,14 @@ def portfolio_pl_endpoint(
     total = len(rows)
     start = (page - 1) * page_size
     return PaginatedPortfolioPLRead(items=rows[start:start + page_size], total=total, page=page, page_size=page_size)
+
+
+@router.get("/portfolio/summary", response_model=PortfolioSummaryRead)
+def portfolio_summary_endpoint(
+    year: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return portfolio_summary(db, year=year)
 
 
 def serialize_transaction(txn, db: Session) -> TransactionRead:
