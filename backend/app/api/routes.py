@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
 from app.db.session import get_db
-from app.models.models import Account, Category, ImportType, Instrument, Platform, TransactionType
+from app.models.models import ImportType, Platform, Transaction, TransactionType
 from app.schemas.schemas import (
     AccountTransactionCreate,
     AccountTransactionRead,
@@ -44,12 +44,8 @@ from app.services.finance import (
     export_all_data,
     get_all_contribution_room,
     get_contribution_room,
-    list_account_transactions,
     list_available_contributions,
-    list_contributions,
     list_contribution_limits,
-    list_transaction_fundings,
-    list_transactions,
     restore_all_data,
     TRACKED_YEARS,
     upsert_manual_valuation,
@@ -60,6 +56,13 @@ from app.services.finance import (
 )
 from app.services.market_data import refresh_market_prices, search_symbols
 from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, timeseries
+from app.services.transaction_reads import (
+    account_transaction_reads,
+    contribution_read,
+    contribution_reads,
+    transaction_read,
+    transaction_reads,
+)
 
 router = APIRouter()
 
@@ -128,101 +131,6 @@ def portfolio_summary_endpoint(
     return portfolio_summary(db, year=year)
 
 
-def serialize_transaction(txn, db: Session) -> TransactionRead:
-    account = db.get(Account, txn.account_id) if txn.account_id else None
-    platform = db.get(Platform, txn.platform_id) if txn.platform_id else None
-    source_platform = db.get(Platform, txn.source_platform_id) if txn.source_platform_id else None
-    instrument = db.get(Instrument, txn.instrument_id) if txn.instrument_id else None
-    category = db.get(Category, txn.category_id) if txn.category_id else None
-    return TransactionRead(
-        id=txn.id,
-        transaction_type=txn.transaction_type,
-        transaction_date=txn.transaction_date,
-        account_name=account.name if account else None,
-        platform_name=platform.canonical_name if platform else None,
-        source_platform_name=source_platform.canonical_name if source_platform else None,
-        instrument_id=instrument.id if instrument else None,
-        symbol=instrument.symbol if instrument else None,
-        broad_category=category.broad if category else None,
-        precise_category=category.precise if category else None,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
-        source_currency=txn.source_currency,
-        quantity=txn.quantity,
-        fees=float(txn.fees or 0),
-        fee_currency=txn.fee_currency,
-        notes=txn.notes,
-        contribution_id=txn.contribution_id,
-        funding_contributions=list_transaction_fundings(db, txn),
-    )
-
-
-def serialize_transaction_row(row, db: Session) -> TransactionRead:
-    txn, account_name, platform_name, symbol_name, broad_category, precise_category = row
-    return TransactionRead(
-        id=txn.id,
-        transaction_type=txn.transaction_type,
-        transaction_date=txn.transaction_date,
-        account_name=account_name,
-        platform_name=platform_name,
-        source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
-        instrument_id=txn.instrument_id,
-        symbol=symbol_name,
-        broad_category=broad_category,
-        precise_category=precise_category,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
-        source_currency=txn.source_currency,
-        quantity=txn.quantity,
-        fees=float(txn.fees or 0),
-        fee_currency=txn.fee_currency,
-        notes=txn.notes,
-        contribution_id=txn.contribution_id,
-        funding_contributions=list_transaction_fundings(db, txn),
-    )
-
-
-def serialize_contribution_row(row) -> ContributionRead:
-    txn, account_name, platform_name, _symbol_name, _broad_category, _precise_category = row
-    return ContributionRead(
-        id=txn.id,
-        transaction_date=txn.transaction_date,
-        account_name=account_name,
-        platform_name=platform_name,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        notes=txn.notes,
-    )
-
-
-def serialize_account_transaction_row(row, db: Session) -> AccountTransactionRead:
-    txn, account_name, platform_name, symbol_name, broad_category, precise_category = row
-    return AccountTransactionRead(
-        id=txn.id,
-        transaction_type=txn.transaction_type,
-        transaction_date=txn.transaction_date,
-        account_name=account_name,
-        platform_name=platform_name,
-        source_platform_name=(db.get(Platform, txn.source_platform_id).canonical_name if txn.source_platform_id else None),
-        instrument_id=txn.instrument_id,
-        symbol=symbol_name,
-        broad_category=broad_category,
-        precise_category=precise_category,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        source_amount=float(txn.source_amount) if txn.source_amount is not None else None,
-        source_currency=txn.source_currency,
-        quantity=txn.quantity,
-        fees=float(txn.fees or 0),
-        fee_currency=txn.fee_currency,
-        notes=txn.notes,
-        contribution_id=txn.contribution_id,
-        funding_contributions=list_transaction_fundings(db, txn),
-    )
-
-
 @router.post("/transactions", response_model=TransactionRead)
 def create_transaction_endpoint(payload: TransactionCreate, db: Session = Depends(get_db)):
     try:
@@ -230,7 +138,7 @@ def create_transaction_endpoint(payload: TransactionCreate, db: Session = Depend
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return serialize_transaction(txn, db)
+    return transaction_read(db, txn)
 
 
 @router.put("/transactions/{transaction_id}", response_model=TransactionRead)
@@ -242,7 +150,7 @@ def update_transaction_endpoint(transaction_id: int, payload: TransactionCreate,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not txn:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return serialize_transaction(txn, db)
+    return transaction_read(db, txn)
 
 
 @router.get("/transactions", response_model=PaginatedTransactionRead)
@@ -256,24 +164,19 @@ def list_transactions_endpoint(
     sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
-    rows, total = list_transactions(db, transaction_type, account, platform, symbol, year, page, sort_direction)
+    items, total = transaction_reads(
+        db, transaction_type=transaction_type, account=account, platform=platform, symbol=symbol,
+        year=year, page=page, sort_direction=sort_direction,
+    )
     return PaginatedTransactionRead(
-        items=[serialize_transaction_row(row, db) for row in rows], total=total, page=page, page_size=10
+        items=items, total=total, page=page, page_size=10
     )
 
 
 @router.post("/contributions", response_model=ContributionRead)
 def create_contribution_endpoint(payload: ContributionCreate, db: Session = Depends(get_db)):
     txn = create_contribution(db, payload)
-    return ContributionRead(
-        id=txn.id,
-        transaction_date=txn.transaction_date,
-        account_name=db.get(Account, txn.account_id).name if txn.account_id else None,
-        platform_name=db.get(Platform, txn.platform_id).canonical_name if txn.platform_id else None,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        notes=txn.notes,
-    )
+    return contribution_read(db, txn)
 
 
 @router.put("/contributions/{transaction_id}", response_model=ContributionRead)
@@ -281,15 +184,7 @@ def update_contribution_endpoint(transaction_id: int, payload: ContributionCreat
     txn = update_contribution(db, transaction_id, payload)
     if not txn:
         raise HTTPException(status_code=404, detail="Contribution not found")
-    return ContributionRead(
-        id=txn.id,
-        transaction_date=txn.transaction_date,
-        account_name=db.get(Account, txn.account_id).name if txn.account_id else None,
-        platform_name=db.get(Platform, txn.platform_id).canonical_name if txn.platform_id else None,
-        amount=float(txn.amount),
-        currency=txn.currency,
-        notes=txn.notes,
-    )
+    return contribution_read(db, txn)
 
 
 @router.get("/contributions", response_model=list[ContributionRead])
@@ -299,8 +194,7 @@ def list_contributions_endpoint(
     year: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    rows = list_contributions(db, account=account, platform=platform, year=year)
-    return [serialize_contribution_row(row) for row in rows]
+    return contribution_reads(db, account=account, platform=platform, year=year)
 
 
 @router.get("/available-contributions", response_model=list[ContributionFundingRead])
@@ -319,7 +213,7 @@ def create_account_transaction_endpoint(payload: AccountTransactionCreate, db: S
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return serialize_transaction(txn, db)
+    return transaction_read(db, txn)
 
 
 @router.put("/account-transactions/{transaction_id}", response_model=AccountTransactionRead)
@@ -331,7 +225,7 @@ def update_account_transaction_endpoint(transaction_id: int, payload: AccountTra
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not txn:
         raise HTTPException(status_code=404, detail="Account transaction not found")
-    return serialize_transaction(txn, db)
+    return transaction_read(db, txn)
 
 
 @router.get("/account-transactions", response_model=PaginatedAccountTransactionRead)
@@ -345,12 +239,12 @@ def list_account_transactions_endpoint(
     sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
-    rows, total = list_account_transactions(
+    items, total = account_transaction_reads(
         db, account=account, platform=platform, symbol=symbol, year=year,
         transaction_type=transaction_type, page=page, sort_direction=sort_direction,
     )
     return PaginatedAccountTransactionRead(
-        items=[serialize_account_transaction_row(row, db) for row in rows], total=total, page=page, page_size=10
+        items=items, total=total, page=page, page_size=10
     )
 
 
