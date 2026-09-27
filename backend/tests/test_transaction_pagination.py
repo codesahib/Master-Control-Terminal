@@ -6,7 +6,8 @@ from sqlalchemy.orm import sessionmaker
 from app.db.session import Base
 from app.models.models import Account, Platform, Transaction, TransactionFunding, TransactionType
 from app.services.finance import list_account_transactions, list_transactions
-from app.services.transaction_reads import transaction_reads
+from app.services.transaction_reads import account_transaction_reads, transaction_reads
+from app.schemas.schemas import AccountTransactionRead
 
 
 def test_transaction_lists_page_filter_and_sort_on_the_server():
@@ -93,3 +94,30 @@ def test_transaction_reads_include_source_platform_and_funding_rows():
         assert [funding.model_dump() for funding in reads[0].funding_contributions] == [
             {"contribution_id": contribution.id, "amount": 100.0, "platform_name": "CIBC"}
         ]
+
+
+def test_account_transaction_reads_return_account_transaction_models():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Session = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+
+    with Session() as db:
+        account = Account(name="RRSP")
+        platform = Platform(canonical_name="Wealthsimple")
+        db.add_all([account, platform])
+        db.flush()
+        db.add(
+            Transaction(
+                transaction_type=TransactionType.dividend_interest,
+                transaction_date=date(2026, 1, 1),
+                account_id=account.id,
+                platform_id=platform.id,
+                amount=1,
+            )
+        )
+        db.commit()
+
+        reads, total = account_transaction_reads(db, account="RRSP")
+
+        assert total == 1
+        assert isinstance(reads[0], AccountTransactionRead)

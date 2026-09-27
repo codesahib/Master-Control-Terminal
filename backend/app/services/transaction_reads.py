@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.models import Account, Category, Instrument, Platform, Transaction, TransactionFunding
-from app.schemas.schemas import ContributionRead, TransactionRead
+from app.schemas.schemas import AccountTransactionRead, ContributionRead, TransactionRead
 from app.services import finance
 
 
@@ -32,7 +32,7 @@ def transaction_reads(db: Session, **filters):
 
 def account_transaction_reads(db: Session, **filters):
     rows, total = finance.list_account_transactions(db, **filters)
-    return _transaction_reads(db, rows), total
+    return _transaction_reads(db, rows, AccountTransactionRead), total
 
 
 def contribution_read(db: Session, transaction: Transaction) -> ContributionRead:
@@ -49,7 +49,7 @@ def contribution_reads(db: Session, **filters) -> list[ContributionRead]:
     return [_contribution_read(row) for row in finance.list_contributions(db, **filters)]
 
 
-def _transaction_reads(db: Session, rows) -> list[TransactionRead]:
+def _transaction_reads(db: Session, rows, read_model=TransactionRead) -> list[TransactionRead]:
     transactions = [row[0] for row in rows]
     if not transactions:
         return []
@@ -84,10 +84,10 @@ def _transaction_reads(db: Session, rows) -> list[TransactionRead]:
         ).all()
     ) if legacy_ids else {}
 
-    return [_transaction_read(row, source_platform_names, fundings, legacy_platform_names) for row in rows]
+    return [_transaction_read(row, source_platform_names, fundings, legacy_platform_names, read_model) for row in rows]
 
 
-def _transaction_read(row, source_platform_names, fundings, legacy_platform_names) -> TransactionRead:
+def _transaction_read(row, source_platform_names, fundings, legacy_platform_names, read_model) -> TransactionRead:
     transaction, account_name, platform_name, symbol, broad_category, precise_category = row
     funding_contributions = fundings[transaction.id]
     if not funding_contributions and transaction.contribution_id:
@@ -96,7 +96,7 @@ def _transaction_read(row, source_platform_names, fundings, legacy_platform_name
             "amount": float(transaction.amount) + float(transaction.fees or 0),
             "platform_name": legacy_platform_names.get(transaction.contribution_id),
         }]
-    return TransactionRead(
+    return read_model(
         id=transaction.id,
         transaction_type=transaction.transaction_type,
         transaction_date=transaction.transaction_date,

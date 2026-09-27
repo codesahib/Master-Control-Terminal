@@ -19,7 +19,7 @@ Create `.env` from `.env.example`, then set:
 - `DATABASE_POOLER_URL` for Docker. Use Supabase's session pooler connection string.
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
 - Frontend: http://localhost:5173
