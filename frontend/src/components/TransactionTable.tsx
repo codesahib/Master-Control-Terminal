@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import {
   ColumnDef,
   flexRender,
@@ -15,12 +15,18 @@ export function TransactionTable<T extends ActivityRecord>({
   onEdit,
   variant = "all",
   showAccount = true,
+  controls,
+  pagination,
+  emptyMessage,
 }: {
   data: T[];
   title?: string;
   onEdit?: (transaction: T) => void;
   variant?: Variant;
   showAccount?: boolean;
+  controls?: ReactNode;
+  pagination?: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void };
+  emptyMessage?: string;
 }) {
   const isContributionTable = variant === "contributions";
   const isTransactionTable = variant === "transactions";
@@ -48,6 +54,7 @@ export function TransactionTable<T extends ActivityRecord>({
       }
 
       baseColumns.push({ header: "Amount", accessorKey: "amount" });
+      baseColumns.push({ header: "Currency", accessorKey: "currency" });
 
       if (isTransactionTable || variant === "all") {
         baseColumns.push({ header: "Fees", accessorKey: "fees" });
@@ -75,7 +82,10 @@ export function TransactionTable<T extends ActivityRecord>({
 
   return (
     <div className="panel table-wrap">
-      <h3>{title}</h3>
+      <div className="table-header">
+        <h3>{title}</h3>
+        {controls}
+      </div>
       <table>
         <thead>
           {table.getHeaderGroups().map((hg) => (
@@ -90,12 +100,33 @@ export function TransactionTable<T extends ActivityRecord>({
           {table.getRowModel().rows.map((row) => (
             <tr key={row.id}>
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                <td
+                  key={cell.id}
+                  data-label={typeof cell.column.columnDef.header === "string" ? cell.column.columnDef.header : undefined}
+                >
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
               ))}
             </tr>
           ))}
+          {table.getRowModel().rows.length === 0 && (
+            <tr>
+              <td className="empty-state" colSpan={columns.length}>
+                {emptyMessage || "No records match the current filters."}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
+      {pagination && (
+        <div className="pagination">
+          <small>Page {pagination.page} of {Math.max(1, Math.ceil(pagination.total / pagination.pageSize))} · {pagination.total} records</small>
+          <div>
+            <button className="btn btn-secondary table-action" disabled={pagination.page === 1} onClick={() => pagination.onPageChange(pagination.page - 1)}>Previous</button>
+            <button className="btn btn-secondary table-action" disabled={pagination.page * pagination.pageSize >= pagination.total} onClick={() => pagination.onPageChange(pagination.page + 1)}>Next</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

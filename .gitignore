@@ -10,6 +10,7 @@ frontend/dist/
 
 # Env
 .env
+backend/.venv/
 
 # OS
 .DS_Store

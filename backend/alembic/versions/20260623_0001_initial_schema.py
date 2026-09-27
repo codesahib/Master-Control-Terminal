@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20260623_0001"
@@ -16,16 +17,17 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-transaction_type = sa.Enum(
+transaction_type = postgresql.ENUM(
     "contribution",
     "investment_buy",
     "investment_sell",
     "transfer",
     "dividend_interest",
     name="transactiontype",
+    create_type=False,
 )
-import_type = sa.Enum("contributions", "holdings", name="importtype")
-import_status = sa.Enum("parsed", "committed", "failed", name="importstatus")
+import_type = postgresql.ENUM("contributions", "holdings", name="importtype", create_type=False)
+import_status = postgresql.ENUM("parsed", "committed", "failed", name="importstatus", create_type=False)
 
 
 def _has_table(table_name: str) -> bool:

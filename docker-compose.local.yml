@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: master_terminal
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d master_terminal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/master_terminal
+      DATABASE_POOLER_URL: ""
+      RUN_MIGRATIONS_ON_STARTUP: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

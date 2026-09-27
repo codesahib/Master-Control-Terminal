@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -13,6 +13,9 @@ class TransactionType(str, enum.Enum):
     investment_sell = "investment_sell"
     transfer = "transfer"
     dividend_interest = "dividend_interest"
+    dividend_reinvestment = "dividend_reinvestment"
+    quantity_adjustment = "quantity_adjustment"
+    currency_exchange = "currency_exchange"
 
 
 class ImportType(str, enum.Enum):
@@ -62,7 +65,25 @@ class Instrument(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     symbol: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    provider_symbol: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    exchange: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    asset_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+
+
+class MarketPrice(Base):
+    __tablename__ = "market_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id", ondelete="CASCADE"), index=True)
+    price: Mapped[float] = mapped_column(Numeric(14, 4))
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), default="yfinance")
+    priced_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class ContributionLimit(Base):
@@ -82,14 +103,29 @@ class Transaction(Base):
     transaction_date: Mapped[date] = mapped_column(Date, index=True)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
     platform_id: Mapped[int | None] = mapped_column(ForeignKey("platforms.id"), nullable=True, index=True)
+    source_platform_id: Mapped[int | None] = mapped_column(ForeignKey("platforms.id"), nullable=True, index=True)
     instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True, index=True)
-    amount: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    amount: Mapped[float] = mapped_column(Numeric(18, 6), default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="CAD")
+    source_amount: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    source_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
-    fees: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    fees: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    fee_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reversal_of_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
+    contribution_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TransactionFunding(Base):
+    __tablename__ = "transaction_fundings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.id", ondelete="CASCADE"), index=True)
+    contribution_id: Mapped[int] = mapped_column(ForeignKey("transactions.id"), index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))
 
 
 class HoldingSnapshot(Base):
@@ -126,3 +162,17 @@ class ImportRow(Base):
     row_number: Mapped[int] = mapped_column(Integer)
     payload_json: Mapped[str] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    operation: Mapped[str] = mapped_column(String(20), index=True)
+    table_name: Mapped[str] = mapped_column(String(100), index=True)
+    row_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    summary: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)

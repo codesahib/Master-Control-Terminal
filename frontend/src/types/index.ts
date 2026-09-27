@@ -3,7 +3,10 @@ export type TransactionType =
   | "investment_buy"
   | "investment_sell"
   | "transfer"
-  | "dividend_interest";
+  | "dividend_interest"
+  | "dividend_reinvestment"
+  | "quantity_adjustment"
+  | "currency_exchange";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 
@@ -13,6 +16,7 @@ export interface ActivityRecord {
   account_name?: string;
   platform_name?: string;
   amount: number;
+  currency: string;
   notes?: string;
 }
 
@@ -20,31 +24,96 @@ export interface Contribution extends ActivityRecord {}
 
 export interface AccountTransaction extends ActivityRecord {
   transaction_type: AccountTransactionType;
+  source_platform_name?: string;
+  instrument_id?: number;
   symbol?: string;
   broad_category?: string;
   precise_category?: string;
   quantity?: number;
   fees?: number;
+  fee_currency?: string;
+  source_amount?: number;
+  source_currency?: string;
+  contribution_id?: number;
+  funding_contributions?: FundingContribution[];
+}
+
+export interface FundingContribution {
+  contribution_id: number;
+  amount: number;
+  platform_name?: string;
+}
+
+export interface ContributionFunding {
+  id: number;
+  platform_name: string;
+  source_label: string;
+  remaining_amount: number;
+}
+
+export interface FundingCashSource {
+  platform_name: string;
+  amount: number;
 }
 
 export interface Holding {
-  id: number;
-  snapshot_date: string;
-  snapshot_year?: number;
-  snapshot_type: "current" | "year_end" | string;
-  holding_date?: string;
-  account_name?: string;
+  id: string;
+  as_of_date: string;
+  account_name: string;
   platform_name?: string;
-  symbol?: string;
+  instrument_id?: number;
+  symbol: string;
   broad_category?: string;
   precise_category?: string;
   record_type: "holding" | "cash" | "unused" | string;
-  market_value: number;
+  quantity?: number;
+  book_value: number;
+  currency: string;
+  average_price?: number;
+  children?: Holding[];
 }
 
 export type Transaction = Omit<AccountTransaction, "transaction_type"> & {
   transaction_type: TransactionType;
 };
+
+export interface PaginatedTransactions {
+  items: Transaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PaginatedAccountTransactions {
+  items: AccountTransaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface PaginatedPortfolioPL {
+  items: PortfolioPLRow[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AccountPLSummary {
+  account: string;
+  book: number;
+  market: number;
+  pl: number;
+  bookReporting: number;
+  marketReporting: number;
+  plReporting: number;
+  plPct?: number | null;
+}
+
+export interface PortfolioSummary {
+  investable_cash: PortfolioPLRow[];
+  allocation: DistributionPoint[];
+  account_pl: AccountPLSummary[];
+}
 
 export interface DistributionPoint {
   label: string;
@@ -67,8 +136,44 @@ export interface ContributionLimitSetting {
   total_room: number;
 }
 
-export interface TimeSeriesPoint {
-  month: string;
-  contributions: number;
-  investments: number;
+export interface SymbolSearchResult {
+  id: number;
+  symbol: string;
+  provider_symbol: string;
+  name?: string;
+  exchange?: string;
+  currency?: string;
+  asset_type?: string;
+  provider: string;
+}
+
+export interface PortfolioPLRow extends Holding {
+  provider_symbol?: string;
+  name?: string;
+  current_price?: number;
+  price_currency?: string;
+  priced_at?: string;
+  market_value?: number;
+  unrealized_pl?: number;
+  unrealized_pl_pct?: number;
+  reporting_currency: string;
+  fx_rate_to_reporting?: number;
+  book_value_reporting?: number;
+  market_value_reporting?: number;
+  unrealized_pl_reporting?: number;
+  price_status: string;
+  manual_valuation_date?: string;
+  children?: PortfolioPLRow[];
+}
+
+export interface ManualValuationPayload {
+  account_name: string;
+  platform_name?: string;
+  instrument_id?: number;
+  symbol?: string;
+  instrument_name?: string;
+  broad_category?: string;
+  precise_category?: string;
+  market_value: number;
+  snapshot_date: string;
 }

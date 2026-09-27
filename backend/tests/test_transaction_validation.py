@@ -13,6 +13,63 @@ def test_investment_requires_symbol():
         )
 
 
+def test_dividend_reinvestment_requires_symbol_and_quantity():
+    with pytest.raises(ValueError):
+        TransactionCreate(
+            transaction_type=TransactionType.dividend_reinvestment,
+            transaction_date="2026-01-01",
+            amount=100,
+        )
+
+
+def test_quantity_adjustment_requires_non_zero_quantity_and_zero_cash():
+    txn = TransactionCreate(
+        transaction_type=TransactionType.quantity_adjustment,
+        transaction_date="2026-01-01",
+        symbol="NVDA",
+        amount=0,
+        quantity=-1,
+    )
+    assert txn.quantity == -1
+
+    with pytest.raises(ValueError):
+        TransactionCreate(
+            transaction_type=TransactionType.quantity_adjustment,
+            transaction_date="2026-01-01",
+            symbol="NVDA",
+            amount=1,
+            quantity=1,
+        )
+
+
+def test_currency_exchange_requires_two_positive_different_currency_amounts():
+    txn = AccountTransactionCreate(
+        transaction_type=TransactionType.currency_exchange,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Questrade",
+        amount=793.26,
+        currency="USD",
+        source_amount=1084.98,
+        source_currency="CAD",
+        fees=11.24,
+        fee_currency="CAD",
+    )
+    assert txn.source_currency == "CAD"
+
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.currency_exchange,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Questrade",
+            amount=793.26,
+            currency="USD",
+            source_amount=1084.98,
+            source_currency="USD",
+        )
+
+
 def test_transfer_requires_notes():
     with pytest.raises(ValueError):
         TransactionCreate(
@@ -46,5 +103,70 @@ def test_account_transaction_rejects_contribution_type():
         AccountTransactionCreate(
             transaction_type=TransactionType.contribution,
             transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Wealthsimple",
+            amount=100,
+        )
+
+
+def test_account_investment_allows_optional_funding():
+    unfunded = AccountTransactionCreate(
+        transaction_type=TransactionType.investment_buy,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Wealthsimple",
+        amount=100,
+    )
+    assert unfunded.funding_contributions == []
+
+    txn = AccountTransactionCreate(
+        transaction_type=TransactionType.investment_buy,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Wealthsimple",
+        amount=100,
+        contribution_id=1,
+    )
+    assert txn.symbol is None
+    assert txn.precise_category is None
+
+
+def test_dividend_reinvestment_requires_holding_details_but_not_a_contribution():
+    txn = AccountTransactionCreate(
+        transaction_type=TransactionType.dividend_reinvestment,
+        transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Wealthsimple",
+        symbol="XEQT",
+        amount=100,
+        quantity=1,
+    )
+    assert txn.contribution_id is None
+
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.dividend_reinvestment,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Wealthsimple",
+            amount=100,
+        )
+
+
+def test_account_transaction_requires_account_and_platform():
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.investment_buy,
+            transaction_date="2026-01-01",
+            account_name="",
+            platform_name="Wealthsimple",
+            amount=100,
+        )
+    with pytest.raises(ValueError):
+        AccountTransactionCreate(
+            transaction_type=TransactionType.investment_buy,
+            transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="",
             amount=100,
         )

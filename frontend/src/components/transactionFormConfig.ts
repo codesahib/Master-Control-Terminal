@@ -7,6 +7,9 @@ export const accountTransactionOptions: { label: string; value: AccountTransacti
   { label: "Investment Sell", value: "investment_sell" },
   { label: "Transfer", value: "transfer" },
   { label: "Dividend/Interest", value: "dividend_interest" },
+  { label: "Dividend Reinvestment", value: "dividend_reinvestment" },
+  { label: "Quantity Adjustment", value: "quantity_adjustment" },
+  { label: "Currency Exchange", value: "currency_exchange" },
 ];
 
 export const categoryOptions: Record<string, string[]> = {
@@ -28,8 +31,6 @@ export const categoryOptions: Record<string, string[]> = {
   Other: ["Other"],
 };
 
-export const defaultBroadCategory = "Cash";
-
 export function preciseOptionsFor(broadCategory: string) {
-  return categoryOptions[broadCategory] || categoryOptions[defaultBroadCategory];
+  return categoryOptions[broadCategory] || [];
 }
