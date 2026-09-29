@@ -313,6 +313,36 @@ class MarketPriceRefreshResult(BaseModel):
     error: Optional[str] = None
 
 
+class DatabaseSyncStateRead(BaseModel):
+    database_id: str
+    last_write_at: Optional[datetime] = None
+    last_push_at: Optional[datetime] = None
+    last_pull_at: Optional[datetime] = None
+    last_sync_at: Optional[datetime] = None
+    last_sync_direction: Optional[str] = None
+    last_sync_status: Optional[str] = None
+    last_sync_error: Optional[str] = None
+
+
+class DatabaseSyncStatus(BaseModel):
+    using_local_database: bool
+    external_database_configured: bool
+    external_available: bool
+    sync_available: bool
+    recommended_action: str
+    local: DatabaseSyncStateRead
+    external: Optional[DatabaseSyncStateRead] = None
+    error: Optional[str] = None
+
+
+class DatabaseSyncResult(BaseModel):
+    status: str
+    direction: str
+    tables_synced: int
+    rows_synced: int
+    synced_at: datetime
+
+
 class PortfolioPLRow(BaseModel):
     id: str
     as_of_date: date

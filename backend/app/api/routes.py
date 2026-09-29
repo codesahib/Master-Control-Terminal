@@ -11,10 +11,13 @@ from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
 from app.db.session import get_db
+from app.core.config import is_local_database_url, is_same_database_url, settings
 from app.models.models import ImportType, Platform, Transaction, TransactionType
 from app.schemas.schemas import (
     AccountTransactionCreate,
     AccountTransactionRead,
+    DatabaseSyncResult,
+    DatabaseSyncStatus,
     PaginatedAccountTransactionRead,
     ContributionCreate,
     ContributionFundingRead,
@@ -56,6 +59,7 @@ from app.services.finance import (
 )
 from app.services.market_data import refresh_market_prices, search_symbols
 from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, timeseries
+from app.services.sync import sync_data_from_external_database, sync_data_to_external_database, sync_status as get_sync_status
 from app.services.transaction_reads import (
     account_transaction_reads,
     contribution_read,
@@ -65,6 +69,10 @@ from app.services.transaction_reads import (
 )
 
 router = APIRouter()
+
+
+def _sync_available() -> bool:
+    return bool(settings.external_database_url and not is_same_database_url(settings.external_database_url, settings.database_url))
 
 
 @router.get("/years", response_model=list[int])
@@ -89,6 +97,51 @@ def search_symbols_endpoint(
 @router.post("/market-prices/refresh", response_model=list[MarketPriceRefreshResult])
 def refresh_market_prices_endpoint(db: Session = Depends(get_db)):
     return refresh_market_prices(db)
+
+
+@router.get("/sync/status", response_model=DatabaseSyncStatus)
+def sync_status(db: Session = Depends(get_db)):
+    same_database = is_same_database_url(settings.external_database_url, settings.database_url)
+    status = get_sync_status(db, None if same_database else settings.external_database_url)
+    using_local_database = is_local_database_url(settings.database_url)
+    return {
+        **status,
+        "using_local_database": using_local_database,
+        "external_database_configured": bool(settings.external_database_url),
+        "sync_available": using_local_database and _sync_available() and status["external_available"],
+    }
+
+
+def _ensure_sync_configured():
+    if not settings.external_database_url:
+        raise HTTPException(status_code=400, detail="External database is not configured")
+    if not is_local_database_url(settings.database_url):
+        raise HTTPException(status_code=400, detail="Sync is only available when the app is using a local database")
+    if is_same_database_url(settings.external_database_url, settings.database_url):
+        raise HTTPException(status_code=400, detail="The app is already using the configured external database")
+
+
+@router.post("/sync/push", response_model=DatabaseSyncResult)
+def push_external_db(db: Session = Depends(get_db)):
+    _ensure_sync_configured()
+    try:
+        return sync_data_to_external_database(db, settings.external_database_url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"External database push failed: {exc}") from exc
+
+
+@router.post("/sync/pull", response_model=DatabaseSyncResult)
+def pull_external_db(db: Session = Depends(get_db)):
+    _ensure_sync_configured()
+    try:
+        return sync_data_from_external_database(db, settings.external_database_url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"External database pull failed: {exc}") from exc
+
+
+@router.post("/sync/external-db", response_model=DatabaseSyncResult)
+def sync_external_db(db: Session = Depends(get_db)):
+    return push_external_db(db)
 
 
 @router.post("/manual-valuations")

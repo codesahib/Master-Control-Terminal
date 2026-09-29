@@ -26,10 +26,11 @@ from app.models.models import (
 )
 from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
 from app.services.portfolio import distribution, grouped_holdings, list_holdings, portfolio_pl, portfolio_summary, timeseries
+from app.services.sync_state import mark_database_write
 
 TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
-BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs"}
+BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs", "sync_state"}
 CATEGORY_OPTIONS = {
     "Cash": ["Cash"],
     "Bond": ["Bond", "GIC", "Money Market"],
@@ -112,6 +113,7 @@ def log_audit(
             source=source,
         )
     )
+    mark_database_write(db)
 
 
 def _rows_for_export(db: Session, table):
@@ -898,6 +900,7 @@ def create_import_preview(db: Session, import_type: ImportType, source_filename:
     db.flush()
     for i, row in enumerate(preview_rows, start=1):
         db.add(ImportRow(import_id=imp.id, row_number=i, payload_json=json.dumps(row), error=None))
+    mark_database_write(db)
     db.commit()
     return imp
 

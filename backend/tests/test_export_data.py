@@ -97,10 +97,11 @@ def test_export_includes_persisted_records():
 
         exported = export_all_data(db)
 
-        exported_tables = {name for name in Base.metadata.tables if name != "audit_logs"}
+        exported_tables = {name for name in Base.metadata.tables if name not in {"audit_logs", "sync_state"}}
         assert set(exported) == exported_tables
         assert "audit_logs" not in exported
-        assert all(set(exported[table.name][0]) == set(table.c.keys()) for table in Base.metadata.tables.values() if table.name != "audit_logs")
+        assert "sync_state" not in exported
+        assert all(set(exported[table.name][0]) == set(table.c.keys()) for table in Base.metadata.tables.values() if table.name not in {"audit_logs", "sync_state"})
         assert exported["accounts"][0]["name"] == "TFSA"
         assert exported["platforms"][0]["canonical_name"] == "Wealthsimple"
         assert exported["platform_aliases"][0]["alias"] == "ws"

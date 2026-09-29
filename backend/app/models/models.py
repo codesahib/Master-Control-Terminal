@@ -1,4 +1,5 @@
 import enum
+import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
@@ -162,6 +163,20 @@ class ImportRow(Base):
     row_number: Mapped[int] = mapped_column(Integer)
     payload_json: Mapped[str] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SyncState(Base):
+    __tablename__ = "sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    database_id: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid.uuid4()))
+    last_write_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_push_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_pull_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_sync_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_sync_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AuditLog(Base):

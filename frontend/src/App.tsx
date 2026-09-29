@@ -6,13 +6,14 @@ import { ContributionModal } from "./components/ContributionModal";
 import { DistributionChart } from "./components/DistributionChart";
 import { ManualValuationModal } from "./components/ManualValuationModal";
 import { TransactionTable } from "./components/TransactionTable";
-import { AccountPLSummary, AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedPortfolioPL, PaginatedTransactions, PortfolioPLRow, PortfolioSummary, Transaction, TransactionType } from "./types";
+import { AccountPLSummary, AccountTransaction, Contribution, ContributionLimitSetting, ContributionRoom, DatabaseSyncResult, DatabaseSyncStatus, DistributionPoint, Holding, PaginatedAccountTransactions, PaginatedPortfolioPL, PaginatedTransactions, PortfolioPLRow, PortfolioSummary, Transaction, TransactionType } from "./types";
 
 const ACCOUNT_NAMES = ["RRSP", "TFSA", "FHSA"];
 const PRICE_STATUSES = ["ok", "stale", "missing", "missing_quantity", "currency_mismatch", "cash"];
 type YearFilter = number | "all";
 type CategoryLevel = "broad" | "precise";
 type ActiveModal = "contribution" | "account-transaction" | "manual-valuation" | null;
+type SyncDirection = "push" | "pull";
 
 function yearParams(year: YearFilter) {
   return year === "all" ? {} : { year };
@@ -20,6 +21,34 @@ function yearParams(year: YearFilter) {
 
 function yearLabel(year: YearFilter) {
   return year === "all" ? "All" : String(year);
+}
+
+function formatSyncTimestamp(value?: string | null) {
+  if (!value) {
+    return "never";
+  }
+  return new Date(value).toLocaleString();
+}
+
+function syncStatusLabel(status: DatabaseSyncStatus | null) {
+  if (!status?.external_database_configured) {
+    return "External DB not configured";
+  }
+  if (!status.external_available) {
+    return "External DB unavailable";
+  }
+  switch (status.recommended_action) {
+    case "push":
+      return "Local ahead";
+    case "pull":
+      return "External ahead";
+    case "conflict":
+      return "Sync conflict";
+    case "in_sync":
+      return "In sync";
+    default:
+      return "Sync unavailable";
+  }
 }
 
 function App() {
@@ -73,7 +102,9 @@ function App() {
   const [savingLimitKey, setSavingLimitKey] = useState<string | undefined>();
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [syncingDatabaseDirection, setSyncingDatabaseDirection] = useState<SyncDirection | null>(null);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [databaseSyncStatus, setDatabaseSyncStatus] = useState<DatabaseSyncStatus | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -195,7 +226,7 @@ function App() {
       await api.put(`/contribution-limits/${row.account}/${row.tax_year}`, {
         new_room: row.new_room,
       });
-      await Promise.all([refreshContributionLimitSettings(), refreshDashboard(), refreshAccountDetails()]);
+      await Promise.all([refreshContributionLimitSettings(), refreshDashboard(), refreshAccountDetails(), refreshDatabaseSyncStatus()]);
     } catch (error) {
       console.error(error);
       setLoadError("Contribution limit failed to save.");
@@ -251,7 +282,7 @@ function App() {
   }
 
   async function refreshAfterSave() {
-    await Promise.all([refreshDashboard(), refreshAccountDetails()]);
+    await Promise.all([refreshDashboard(), refreshAccountDetails(), refreshDatabaseSyncStatus()]);
   }
 
   async function refreshMarketPrices() {
@@ -259,7 +290,7 @@ function App() {
       setIsRefreshingPrices(true);
       setLoadError(null);
       await api.post("/market-prices/refresh");
-      await refreshDashboard();
+      await Promise.all([refreshDashboard(), refreshDatabaseSyncStatus()]);
     } catch (error) {
       console.error(error);
       setLoadError("Price refresh failed. Try again later.");
@@ -328,7 +359,7 @@ function App() {
       await api.post("/import-backup", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      await Promise.all([refreshDashboard(), refreshAccountDetails()]);
+      await Promise.all([refreshDashboard(), refreshAccountDetails(), refreshDatabaseSyncStatus()]);
       if (view === "limits") {
         await refreshContributionLimitSettings();
       }
@@ -341,8 +372,45 @@ function App() {
     }
   }
 
+  async function refreshDatabaseSyncStatus() {
+    const response = await api.get<DatabaseSyncStatus>("/sync/status");
+    setDatabaseSyncStatus(response.data);
+    return response.data;
+  }
+
+  async function syncExternalDatabase(direction: SyncDirection) {
+    const action = direction === "push" ? "push local data to the external DB" : "pull external DB data into local";
+    const effect = direction === "push"
+      ? "replace the configured external database with this local data"
+      : "replace this local database with the configured external data";
+    const confirmed = window.confirm(
+      `This will ${effect}. Continue with ${action}?`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setSyncingDatabaseDirection(direction);
+      setBackupError(null);
+      setBackupMessage(null);
+      const response = await api.post<DatabaseSyncResult>(`/sync/${direction}`);
+      await Promise.all([
+        refreshDatabaseSyncStatus(),
+        ...(direction === "pull" ? [refreshDashboard(), refreshAccountDetails()] : []),
+      ]);
+      const target = direction === "push" ? "to the external DB" : "from the external DB";
+      setBackupMessage(`Synced ${response.data.rows_synced} rows across ${response.data.tables_synced} tables ${target}.`);
+    } catch (error: any) {
+      console.error(error);
+      setBackupError(error?.response?.data?.detail?.toString() || "External DB sync failed. Please check configuration.");
+    } finally {
+      setSyncingDatabaseDirection(null);
+    }
+  }
+
   useEffect(() => {
-    Promise.all([api.get<number[]>("/years"), api.get<string[]>("/platforms")])
+    Promise.all([api.get<number[]>("/years"), api.get<string[]>("/platforms"), refreshDatabaseSyncStatus()])
       .then(([yearResponse, platformResponse]) => {
         setYears(yearResponse.data);
         setPlatforms(platformResponse.data);
@@ -655,6 +723,36 @@ function App() {
           <button className="btn btn-secondary" onClick={exportData} disabled={isExporting}>
             {isExporting ? "Exporting..." : "Export Data"}
           </button>
+          {databaseSyncStatus?.external_database_configured && (
+            <div
+              className={`sync-control sync-${databaseSyncStatus.recommended_action}`}
+              title={`Local updated: ${formatSyncTimestamp(databaseSyncStatus.local.last_write_at)} | External updated: ${formatSyncTimestamp(databaseSyncStatus.external?.last_write_at)}`}
+            >
+              <span>{syncStatusLabel(databaseSyncStatus)}</span>
+              <button
+                className="btn btn-secondary"
+                onClick={() => syncExternalDatabase("push")}
+                disabled={!databaseSyncStatus.sync_available || syncingDatabaseDirection !== null}
+              >
+                {syncingDatabaseDirection === "push"
+                  ? "Pushing..."
+                  : databaseSyncStatus.recommended_action === "conflict"
+                    ? "Push Local Over External"
+                    : "Push"}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => syncExternalDatabase("pull")}
+                disabled={!databaseSyncStatus.sync_available || syncingDatabaseDirection !== null}
+              >
+                {syncingDatabaseDirection === "pull"
+                  ? "Pulling..."
+                  : databaseSyncStatus.recommended_action === "conflict"
+                    ? "Pull External Over Local"
+                    : "Pull"}
+              </button>
+            </div>
+          )}
           <button className="btn btn-secondary" onClick={refreshMarketPrices} disabled={isRefreshingPrices}>
             {isRefreshingPrices ? "Refreshing..." : "Refresh Prices"}
           </button>

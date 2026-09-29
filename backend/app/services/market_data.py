@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.models import Instrument, MarketPrice, Transaction
+from app.services.sync_state import mark_database_write
 
 PROVIDER = "yfinance"
 US_EXCHANGE_SYMBOLS = {"AVGO", "COST", "GOOG", "NVDA", "QQQM", "TSLA"}
@@ -119,6 +120,8 @@ def search_symbols(db: Session, query: str, limit: int = 8) -> list[dict[str, An
         if len(rows) >= limit:
             break
 
+    if rows:
+        mark_database_write(db)
     db.commit()
     return [serialize_instrument(row) for row in rows[:limit]]
 
@@ -223,6 +226,8 @@ def refresh_market_prices(db: Session) -> list[dict[str, Any]]:
             "currency": currency or instrument.currency,
             "priced_at": priced_at,
         })
+    if any(result["status"] == "ok" for result in results):
+        mark_database_write(db)
     db.commit()
     return results
 

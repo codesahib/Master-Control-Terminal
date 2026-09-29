@@ -139,6 +139,7 @@ td,
 .pagination,
 .pagination > div,
 .top-controls,
+.sync-control,
 .funding-source {
   display: flex;
   align-items: center;
@@ -148,6 +149,36 @@ td,
 .top-controls {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.sync-control {
+  min-height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--surface-2);
+}
+
+.sync-control span {
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sync-push span,
+.sync-pull span {
+  color: var(--accent-2);
+}
+
+.sync-conflict span,
+.sync-unavailable span {
+  color: var(--danger);
+}
+
+.sync-in_sync span {
+  color: var(--success);
 }
 
 .chart-header,
@@ -558,12 +589,14 @@ tr:hover td {
   .table-header,
   .pagination,
   .top-controls,
+  .sync-control,
   .table-controls {
     align-items: stretch;
     flex-direction: column;
   }
 
   .btn,
+  .sync-control,
   .top-controls label,
   .table-controls label {
     width: 100%;

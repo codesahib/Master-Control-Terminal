@@ -177,3 +177,33 @@ export interface ManualValuationPayload {
   market_value: number;
   snapshot_date: string;
 }
+
+export interface DatabaseSyncState {
+  database_id: string;
+  last_write_at?: string | null;
+  last_push_at?: string | null;
+  last_pull_at?: string | null;
+  last_sync_at?: string | null;
+  last_sync_direction?: string | null;
+  last_sync_status?: string | null;
+  last_sync_error?: string | null;
+}
+
+export interface DatabaseSyncStatus {
+  using_local_database: boolean;
+  external_database_configured: boolean;
+  external_available: boolean;
+  sync_available: boolean;
+  recommended_action: "push" | "pull" | "in_sync" | "conflict" | "unavailable" | string;
+  local: DatabaseSyncState;
+  external?: DatabaseSyncState | null;
+  error?: string | null;
+}
+
+export interface DatabaseSyncResult {
+  status: string;
+  direction: "push" | "pull" | string;
+  tables_synced: number;
+  rows_synced: number;
+  synced_at: string;
+}

@@ -18,6 +18,7 @@ services:
   api:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/master_terminal
+      EXTERNAL_DATABASE_URL: ${DATABASE_POOLER_URL:-${DATABASE_URL:-}}
       DATABASE_POOLER_URL: ""
       RUN_MIGRATIONS_ON_STARTUP: "1"
     depends_on:

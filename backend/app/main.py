@@ -6,6 +6,7 @@ from app.api.routes import router as api_router
 from app.db.session import SessionLocal
 from app.models.models import Account, ContributionLimit
 from app.services.finance import seed_reference_data
+from app.services.sync_state import create_sync_state_table, get_or_create_sync_state
 
 app = FastAPI(title="Master Terminal API", version="0.1.0")
 
@@ -21,6 +22,9 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     db = SessionLocal()
+    create_sync_state_table(db.get_bind())
+    get_or_create_sync_state(db)
+    db.commit()
     seed_reference_data(db)
 
     # Seed baseline limits for current years when missing.
