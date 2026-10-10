@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { ACCOUNT_NAMES } from "../components/Shell";
 import { Pager, TransactionTable } from "../components/TransactionTable";
@@ -58,6 +58,7 @@ export function Activity() {
   const [platform, setPlatform] = useState("");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [year]);
   const query = useApi<PaginatedTransactions>("/transactions", {
     page,
     page_size: PAGE_SIZE,

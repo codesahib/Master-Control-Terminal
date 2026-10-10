@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { Pager, TransactionTable } from "../components/TransactionTable";
 import { useApp, yearLabel, yearParams } from "../context";
@@ -20,6 +20,7 @@ export function Account({ name }: { name: string }) {
   const [platform, setPlatform] = useState("");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [year]);
   const [expanded, setExpanded] = useState<string[]>([]);
   const yp = yearParams(year);
 
@@ -60,7 +61,7 @@ export function Account({ name }: { name: string }) {
               <div><span className="muted">Total room</span><b className="num money">{money(room.total_room)}</b></div>
               <div><span className="muted">Used</span><b className="num money">{money(room.used)}</b></div>
               <div><span className="muted">Remaining</span><b className={`num money ${room.remaining < 0 ? "neg" : ""}`}>{money(room.remaining)}</b></div>
-              {name === "RRSP" && typeof year === "number" && <div><span className="muted">Deadline</span><b>{shortDate(rrspDeadline(year).toISOString().slice(0, 10))}</b></div>}
+              {name === "RRSP" && typeof year === "number" && <div><span className="muted">Deadline</span><b>{shortDate(rrspDeadline(year).toLocaleDateString("en-CA"))}</b></div>}
             </div>
             <span className="bar bar-lg" role="img" aria-label={`${used.toFixed(0)}% of room used`}><span className={room.remaining < 0 ? "fill-neg" : "fill-c1"} style={{ width: `${used}%` }} /></span>
           </div>

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { money, shortDate, TYPE_LABELS } from "../lib/format";
 import type { ActivityRecord, TransactionType } from "../types";
 import { Icon } from "./Icon";
@@ -19,6 +19,10 @@ const OUTFLOW = new Set<TransactionType>(["investment_buy", "withdrawal"]);
 export function Pager({ page, pageSize, total, onPageChange }: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const first = total ? (page - 1) * pageSize + 1 : 0;
+  // After deletes or filter changes the current page can fall past the end.
+  useEffect(() => {
+    if (page > pages) onPageChange(pages);
+  }, [page, pages, onPageChange]);
   return (
     <div className="pager">
       <span className="muted">{total ? `${first} to ${Math.min(page * pageSize, total)} of ${total}` : "No records"}</span>

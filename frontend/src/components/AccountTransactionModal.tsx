@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useId, useState } from "react";
 import { api } from "../api/client";
-import { errorMessage, money, TYPE_LABELS } from "../lib/format";
+import { errorMessage, money, today, TYPE_LABELS } from "../lib/format";
 import { AccountTransaction, AccountTransactionType, ContributionFunding, FundingCashSource, SymbolSearchResult } from "../types";
 import { Dialog } from "./Dialog";
-import { Field, MoneyInput, PlatformSelect, Section, Segmented } from "./form";
+import { CURRENCIES, Field, MoneyInput, PlatformSelect, Section, Segmented } from "./form";
 import { Icon } from "./Icon";
 import { SymbolPicker } from "./SymbolPicker";
 import { ACCOUNT_NAMES } from "./Shell";
@@ -41,7 +41,7 @@ export function AccountTransactionModal({
   const defaultPlatform = platforms[0] || "";
   const [transactionType, setTransactionType] = useState<AccountTransactionType>(transaction?.transaction_type || defaultTransactionType);
   const [form, setForm] = useState({
-    transaction_date: transaction?.transaction_date || new Date().toISOString().slice(0, 10),
+    transaction_date: transaction?.transaction_date || today(),
     account_name: transaction?.account_name || defaultAccount,
     platform_name: transaction ? transaction.platform_name || "" : defaultPlatform,
     source_platform_name: transaction?.source_platform_name || "",
@@ -111,8 +111,8 @@ export function AccountTransactionModal({
       const symbol = candidate.id == null ? (await api.post<SymbolSearchResult>("/symbols", candidate)).data : candidate;
       set({ instrument_id: symbol.id ?? undefined, symbol: symbol.symbol, currency: symbol.currency || form.currency, instrument_name: symbol.name || form.instrument_name });
       setSymbolQuery(symbol.provider_symbol);
-    } catch (exc) {
-      setError(errorMessage(exc, "Could not save that symbol."));
+    } catch (exc: any) {
+      setError(exc?.response?.status === 422 ? "This listing's currency isn't supported. Use a custom symbol." : errorMessage(exc, "Could not save that symbol."));
     }
   }
 
@@ -131,7 +131,7 @@ export function AccountTransactionModal({
   const cashNeeded = Number((supportsSourceCash && form.source_amount) || form.amount || 0) + Number(form.fees || 0);
   const fundingTotal = fundingCashSources.reduce((sum, funding) => sum + funding.amount, 0);
 
-  function useRemainingAmount(contribution: ContributionFunding) {
+  function fillRemaining(contribution: ContributionFunding) {
     const allocatedElsewhere = fundingCashSources.filter((funding) => funding.platform_name !== contribution.platform_name).reduce((sum, funding) => sum + funding.amount, 0);
     const amount = Math.max(0, Math.min(contribution.remaining_amount, cashNeeded - allocatedElsewhere));
     updateFundingAmount(contribution.platform_name, String(Math.round(amount * 100) / 100));
@@ -165,7 +165,7 @@ export function AccountTransactionModal({
         precise_category: showCategories ? form.precise_category || null : null,
         instrument_id: requiresSymbol ? form.instrument_id || null : null,
         symbol: requiresSymbol ? form.symbol || null : null,
-        instrument_name: requiresSymbol || showCategories ? form.instrument_name || null : null,
+        instrument_name: requiresSymbol ? form.instrument_name || null : null,
         amount: isAdjustment ? 0 : Number(form.amount),
         currency: form.currency,
         source_amount: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? Number(form.source_amount) : null,
@@ -198,12 +198,12 @@ export function AccountTransactionModal({
       <div>
         <div className="sum-head">
           {TYPE_LABELS[transactionType]}
-          {requiresSymbol && (qty ? ` ${qty}` : "")}
+          {requiresSymbol && qty ? <span className="money"> {qty}</span> : ""}
           {requiresSymbol && form.symbol ? ` ${form.symbol}` : ""}
         </div>
         <div className="sub">{form.account_name} · {isTransfer ? `${form.source_platform_name || "?"} to ${form.platform_name || "?"}` : form.platform_name || "No platform"}</div>
       </div>
-      <dl className="sum-rows">
+      <dl className="sum-rows money">
         {isCurrencyExchange ? (
           <>
             <div><dt>You give</dt><dd className="num">{money(Number(form.source_amount || 0), form.source_currency)}</dd></div>
@@ -221,7 +221,7 @@ export function AccountTransactionModal({
       {requiresFunding && fundingCashSources.length > 0 && (
         <div className={`sum-check ${Math.abs(fundingTotal - cashNeeded) < 0.005 ? "ok" : "warn"}`}>
           <Icon name={Math.abs(fundingTotal - cashNeeded) < 0.005 ? "check" : "warn"} size={16} />
-          Funding {money(fundingTotal)} of {money(cashNeeded)} needed
+          <span className="money">Funding {money(fundingTotal)} of {money(cashNeeded)} needed</span>
         </div>
       )}
       {requiresSymbol && !form.symbol && <div className="sum-check warn"><Icon name="warn" size={16} />Pick a symbol</div>}
@@ -233,6 +233,7 @@ export function AccountTransactionModal({
       title={transaction ? "Edit transaction" : "New transaction"}
       subtitle="Pick a type. The form only shows the fields that type needs."
       size="lg"
+      busy={isSaving}
       onClose={onClose}
       aside={summary}
       footer={
@@ -241,7 +242,7 @@ export function AccountTransactionModal({
             <button className="btn btn-danger-g" type="button" onClick={onDelete}><Icon name="trash" size={16} />Delete</button>
           )}
           <span className="grow" />
-          <button className="btn btn-s" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-s" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
           <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save transaction"}</button>
         </>
       }
@@ -284,6 +285,9 @@ export function AccountTransactionModal({
                 />
               </Field>
             )}
+            {requiresSymbol && form.is_custom_symbol && (
+              <Field label="Instrument name" htmlFor="tx-name" span={6}><input id="tx-name" className="inp" placeholder="For example: EQ Bank 1-year GIC" value={form.instrument_name} onChange={(event) => set({ instrument_name: event.target.value })} /></Field>
+            )}
             {showCategories && (
               <>
                 <Field label="Broad category" htmlFor="tx-broad">
@@ -298,9 +302,6 @@ export function AccountTransactionModal({
                     {preciseOptionsFor(form.broad_category).map((category) => <option key={category} value={category}>{category}</option>)}
                   </select>
                 </Field>
-                {!requiresSymbol && (
-                  <Field label="Instrument name" htmlFor="tx-name" span={6}><input id="tx-name" className="inp" placeholder="For example: EQ Bank 1-year GIC" value={form.instrument_name} onChange={(event) => set({ instrument_name: event.target.value })} /></Field>
-                )}
               </>
             )}
           </Section>
@@ -320,7 +321,7 @@ export function AccountTransactionModal({
                 </Field>
               )}
               {!isAdjustment && (
-                <Field label={AMOUNT_LABELS[transactionType] || "Amount"} htmlFor="tx-amount" span={requiresSymbol ? 2 : isWithdrawal ? 6 : 3}>
+                <Field label={AMOUNT_LABELS[transactionType] || "Amount"} htmlFor="tx-amount" span={requiresSymbol ? 2 : isWithdrawal ? 6 : 3} hint={CURRENCIES.includes(form.currency) ? undefined : <span className="warn-text">{form.currency} isn&apos;t supported. Pick CAD or USD, or use a custom symbol.</span>}>
                   <MoneyInput id="tx-amount" required min={transactionType === "investment_buy" ? "0" : "0.000001"} step="0.000001" value={form.amount} onChange={(value) => set({ amount: value })} currency={form.currency} onCurrencyChange={(currency) => set({ currency })} />
                 </Field>
               )}
@@ -355,7 +356,7 @@ export function AccountTransactionModal({
                     {funding && (
                       <div className="fund-amt">
                         <MoneyInput id={`fund-${contribution.platform_name.replace(/\s+/g, "-")}`} required min="0.01" value={funding.amount ? String(funding.amount) : ""} onChange={(value) => updateFundingAmount(contribution.platform_name, value)} currency="CAD" />
-                        <button className="btn btn-g sm" type="button" onClick={() => useRemainingAmount(contribution)}>Use all</button>
+                        <button className="btn btn-g sm" type="button" onClick={() => fillRemaining(contribution)}>Use all</button>
                       </div>
                     )}
                   </div>

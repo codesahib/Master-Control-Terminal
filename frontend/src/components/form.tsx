@@ -60,7 +60,7 @@ export function MoneyInput({ id, value, onChange, currency, onCurrencyChange, mi
       <input id={id} type="number" inputMode="decimal" min={min} step={step} required={required} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
       {onCurrencyChange ? (
         <select className="suf" aria-label="Currency" value={currency} onChange={(event) => onCurrencyChange(event.target.value)}>
-          {CURRENCIES.map((option) => <option key={option}>{option}</option>)}
+          {(CURRENCIES.includes(currency) ? CURRENCIES : [...CURRENCIES, currency]).map((option) => <option key={option}>{option}</option>)}
         </select>
       ) : (
         <span className="suf">{currency}</span>

@@ -13,7 +13,6 @@ interface Props {
   onSelect: (symbol: SymbolSearchResult) => Promise<void> | void;
 }
 
-// Isolated so a future "save chosen candidate" endpoint only changes onSelect wiring.
 export function SymbolPicker({ query, onQueryChange, isCustom, onCustomChange, selectedName, selected, onSelect }: Props) {
   const [results, setResults] = useState<SymbolSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -23,15 +22,20 @@ export function SymbolPicker({ query, onQueryChange, isCustom, onCustomChange, s
       setResults([]);
       return;
     }
+    let live = true; // drop responses that arrive after the query changed or a symbol was picked
     const timeout = window.setTimeout(() => {
       setSearching(true);
       api
         .get<SymbolSearchResult[]>("/symbols/search", { params: { q: query.trim() } })
-        .then((response) => setResults(response.data))
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false));
+        .then((response) => live && setResults(response.data))
+        .catch(() => live && setResults([]))
+        .finally(() => live && setSearching(false));
     }, 250);
-    return () => window.clearTimeout(timeout);
+    return () => {
+      live = false;
+      window.clearTimeout(timeout);
+      setSearching(false);
+    };
   }, [query, isCustom, selected]);
 
   return (
@@ -55,7 +59,7 @@ export function SymbolPicker({ query, onQueryChange, isCustom, onCustomChange, s
       {results.length > 0 && (
         <div className="symbol-results" id="tx-symbol-results" role="listbox">
           {results.map((symbol) => (
-            <button className="symbol-result" type="button" role="option" aria-selected="false" key={symbol.id ?? symbol.provider_symbol} onClick={() => onSelect(symbol)}>
+            <button className="symbol-result" type="button" role="option" aria-selected="false" key={symbol.id ?? symbol.provider_symbol} onClick={() => { setResults([]); onSelect(symbol); }}>
               <span className="tk">{symbol.symbol.slice(0, 4)}</span>
               <span className="symbol-text">
                 <b className="mono">{symbol.provider_symbol}</b>
@@ -67,7 +71,7 @@ export function SymbolPicker({ query, onQueryChange, isCustom, onCustomChange, s
       )}
       {selected && !isCustom && selectedName && <p className="hint">{selectedName}</p>}
       <label className="check">
-        <input className="cb" type="checkbox" checked={isCustom} onChange={(event) => onCustomChange(event.target.checked)} />
+        <input className="cb" type="checkbox" checked={isCustom} onChange={(event) => { setResults([]); onCustomChange(event.target.checked); }} />
         Not listed? Use a custom symbol (no live price)
       </label>
     </div>

@@ -7,24 +7,29 @@ type EditableRow = (Contribution | AccountTransaction) & { transaction_type?: Tr
 
 // Edit and delete for any activity row; contributions and account transactions use different endpoints.
 export function useRecordActions() {
-  const { openModal, refresh, notify } = useApp();
+  const { openModal, closeModal, openConfirm, refresh, notify } = useApp();
 
   function edit(row: EditableRow) {
     if (!row.transaction_type || row.transaction_type === "contribution") openModal({ kind: "contribution", contribution: row as Contribution });
     else openModal({ kind: "transaction", transaction: row as AccountTransaction });
   }
 
+  // Opens on top of any edit dialog; cancelling returns to it unchanged.
   function remove(row: EditableRow) {
     const type = row.transaction_type || "contribution";
     const path = type === "contribution" ? `/contributions/${row.id}` : `/account-transactions/${row.id}`;
-    openModal({
-      kind: "confirm",
+    openConfirm({
       title: `Delete this ${TYPE_LABELS[type].toLowerCase()}?`,
-      message: `${TYPE_LABELS[type]} on ${shortDate(row.transaction_date)} for ${money(row.amount, row.currency)} in ${row.account_name || "no account"}. This cannot be undone here; the audit log keeps a copy.`,
+      message: (
+        <>
+          {TYPE_LABELS[type]} on {shortDate(row.transaction_date)} for <span className="money">{money(row.amount, row.currency)}</span> in {row.account_name || "no account"}. This cannot be undone here; the audit log keeps a copy.
+        </>
+      ),
       confirmLabel: "Delete",
       danger: true,
       onConfirm: async () => {
         await api.delete(path);
+        closeModal();
         notify("Deleted.");
         refresh();
       },

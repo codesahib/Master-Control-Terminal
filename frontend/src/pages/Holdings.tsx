@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
 import { ACCOUNT_NAMES } from "../components/Shell";
@@ -36,6 +36,7 @@ export function Holdings() {
   const [sortBy, setSortBy] = useState("market_value");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [year, status]);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -146,18 +147,18 @@ export function Holdings() {
                         </div>
                       </td>
                       <td><span className="tag">{row.account_name}</span><div className="muted">{canExpand ? `${children.length} platforms` : row.platform_name || children[0]?.platform_name || "–"}</div></td>
-                      <td className="r"><div className="num">{quantity(row.quantity)}</div><div className="muted num">{row.average_price ? `avg ${money(row.average_price, row.currency, 2)}` : ""}</div></td>
+                      <td className="r money"><div className="num">{quantity(row.quantity)}</div><div className="muted num">{row.average_price ? `avg ${money(row.average_price, row.currency, 2)}` : ""}</div></td>
                       <td className="r"><div className="num">{row.current_price ? money(row.current_price, row.price_currency || row.currency) : "–"}</div><div className="muted">{row.manual_valuation_date ? `manual ${row.manual_valuation_date}` : row.priced_at ? timeAgo(row.priced_at) : ""}</div></td>
                       <td className="r"><b className="num money">{money(row.market_value, row.currency)}</b><div className="muted num money">book {money(row.book_value, row.currency)}</div></td>
                       <td className="r"><div className={`num money ${plTone(row.unrealized_pl)}`}>{signedMoney(row.unrealized_pl, row.currency)}</div><div className={`num ${plTone(row.unrealized_pl)}`}>{pct(row.unrealized_pl_pct)}</div></td>
-                      <td><div className="stc"><StatusChip status={row.price_status} />{needsValue(row) && <button className="btn btn-s xs" type="button" onClick={() => updateValue(row)}>Update value</button>}</div></td>
+                      <td><div className="stc"><StatusChip status={row.price_status} />{needsValue(row) && !canExpand && <button className="btn btn-s xs" type="button" onClick={() => updateValue(row)}>Update value</button>}</div></td>
                       <td>{canExpand && <button className={`exp${open ? " open" : ""}`} type="button" aria-expanded={open} aria-label={open ? "Hide platforms" : "Show platforms"} onClick={() => toggle(row.id)}><Icon name="chevron" size={16} /></button>}</td>
                     </tr>
                     {canExpand && open && children.map((child) => (
                       <tr className="kid" key={child.id}>
                         <td><div className="hold-n kid-n"><b>{child.platform_name || "–"}</b><span className="muted">{child.account_name}</span></div></td>
                         <td><span className="tag">{child.account_name}</span></td>
-                        <td className="r num">{quantity(child.quantity)}</td>
+                        <td className="r num money">{quantity(child.quantity)}</td>
                         <td className="r num">{child.current_price ? money(child.current_price, child.price_currency || child.currency) : "–"}</td>
                         <td className="r num money">{money(child.market_value, child.currency)}</td>
                         <td className={`r num money ${plTone(child.unrealized_pl)}`}>{signedMoney(child.unrealized_pl, child.currency)} · {pct(child.unrealized_pl_pct)}</td>
@@ -188,8 +189,8 @@ export function Holdings() {
                 {open && (
                   <div className="hc-d">
                     <dl className="det">
-                      <div><dt>Quantity</dt><dd className="num">{quantity(row.quantity)}</dd></div>
-                      <div><dt>Avg cost</dt><dd className="num">{row.average_price ? money(row.average_price, row.currency) : "–"}</dd></div>
+                      <div><dt>Quantity</dt><dd className="num money">{quantity(row.quantity)}</dd></div>
+                      <div><dt>Avg cost</dt><dd className="num money">{row.average_price ? money(row.average_price, row.currency) : "–"}</dd></div>
                       <div><dt>Price</dt><dd className="num">{row.current_price ? money(row.current_price, row.price_currency || row.currency) : "–"}</dd></div>
                       <div><dt>Book</dt><dd className="num money">{money(row.book_value, row.currency)}</dd></div>
                       <div><dt>Unrealized</dt><dd className={`num money ${plTone(row.unrealized_pl)}`}>{signedMoney(row.unrealized_pl, row.currency)}</dd></div>
@@ -198,11 +199,15 @@ export function Holdings() {
                     {children.length > 1 && (
                       <ul className="plat-list">
                         {children.map((child) => (
-                          <li key={child.id}><span><b>{child.platform_name || "–"}</b> <span className="muted">{quantity(child.quantity)} units</span></span><span className="num money">{money(child.market_value ?? child.book_value, child.currency)}</span></li>
+                          <li key={child.id}>
+                            <span><b>{child.platform_name || "–"}</b> <span className="muted money">{quantity(child.quantity)} units</span></span>
+                            <span className="num money">{money(child.market_value ?? child.book_value, child.currency)}</span>
+                            {needsValue(child) && <button className="btn btn-s sm" type="button" onClick={() => updateValue(child)}>Update value</button>}
+                          </li>
                         ))}
                       </ul>
                     )}
-                    {needsValue(row) && <button className="btn btn-s" type="button" onClick={() => updateValue(row)}>Update value</button>}
+                    {needsValue(row) && children.length <= 1 && <button className="btn btn-s" type="button" onClick={() => updateValue(row)}>Update value</button>}
                   </div>
                 )}
               </li>

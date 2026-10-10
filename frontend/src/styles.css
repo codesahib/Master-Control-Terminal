@@ -200,6 +200,12 @@ td,
   color: var(--text-3);
   text-align: center;
 }
+.warn-text {
+  color: var(--warn);
+}
+.fx-hint {
+  margin-top: 8px;
+}
 .form-error {
   margin-top: 12px;
   padding: 10px 12px;
@@ -1305,8 +1311,16 @@ textarea.inp {
 .action-item:first-child {
   border-top: 0;
 }
-a.list-row:hover {
+a.list-row:hover,
+.row-btn:hover {
   background: var(--surface-2);
+}
+.row-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 .li {
   display: grid;
@@ -1320,6 +1334,7 @@ a.list-row:hover {
 }
 .switch {
   position: relative;
+  display: inline-block;
   flex: none;
   width: 48px;
   height: 28px;
@@ -1888,6 +1903,23 @@ a.list-row:hover {
   .hide-touch {
     display: none;
   }
+  /* Touch layouts: every control is at least 44px; links get a padded hit area without moving layout. */
+  .btn.sm,
+  .icon-btn.sm,
+  .btn.xs,
+  .exp,
+  .fchip {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .seg-sm {
+    height: var(--ctl);
+  }
+  .link {
+    display: inline-block;
+    margin: -12px -8px;
+    padding: 12px 8px;
+  }
 }
 
 /* Phones: full-screen dialogs, cards instead of tables, one-column forms. */
@@ -2090,5 +2122,15 @@ a.list-row:hover {
   }
   .list-row .seg button {
     padding: 0 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -10,9 +10,17 @@ export type ModalState =
   | { kind: "contribution"; contribution?: Contribution; account?: string }
   | { kind: "transaction"; transaction?: AccountTransaction; account?: string; type?: AccountTransactionType }
   | { kind: "valuation"; row: PortfolioPLRow }
-  | { kind: "confirm"; title: string; message: string; confirmLabel: string; danger?: boolean; onConfirm: () => Promise<void> | void }
   | { kind: "new"; account?: string }
   | null;
+
+// Confirms open on top of any modal, so cancelling returns to the modal with its state intact.
+export interface ConfirmState {
+  title: string;
+  message: ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => Promise<void> | void;
+}
 
 export interface Toast {
   id: number;
@@ -39,6 +47,9 @@ interface AppState {
   modal: ModalState;
   openModal: (modal: Exclude<ModalState, null>) => void;
   closeModal: () => void;
+  confirm: ConfirmState | null;
+  openConfirm: (confirm: ConfirmState) => void;
+  closeConfirm: () => void;
   health: PortfolioHealth | null;
   refreshPrices: () => Promise<void>;
   refreshingPrices: boolean;
@@ -76,6 +87,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [version, setVersion] = useState(0);
   const [toast, setToast] = useState<Toast | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [health, setHealth] = useState<PortfolioHealth | null>(null);
   const [refreshingPrices, setRefreshingPrices] = useState(false);
 
@@ -102,7 +114,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setPlatforms(platformResponse.data);
       })
       .catch((error) => notify(errorMessage(error, "Startup data failed. Check the API connection."), "error"));
-  }, []);
+    // Saves and restores can add years or platforms, so refetch with the data version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   useEffect(() => {
     api
@@ -166,11 +180,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       modal,
       openModal: setModal,
       closeModal: () => setModal(null),
+      confirm,
+      openConfirm: setConfirm,
+      closeConfirm: () => setConfirm(null),
       health,
       refreshPrices,
       refreshingPrices,
     }),
-    [year, currency, years, platforms, themePref, theme, privacy, version, refresh, toast, notify, modal, health, refreshPrices, refreshingPrices]
+    [year, currency, years, platforms, themePref, theme, privacy, version, refresh, toast, notify, modal, confirm, health, refreshPrices, refreshingPrices]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

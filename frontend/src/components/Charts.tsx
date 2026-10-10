@@ -1,18 +1,27 @@
-import ReactECharts from "echarts-for-react";
+import ReactEChartsCore from "echarts-for-react/lib/core";
+import { BarChart, LineChart, PieChart } from "echarts/charts";
+import { GridComponent, TooltipComponent } from "echarts/components";
+import * as echarts from "echarts/core";
+import { SVGRenderer } from "echarts/renderers";
 import { useMemo } from "react";
 import { useApp } from "../context";
 import { compactMoney, money, shortDate } from "../lib/format";
 
+// Only the pieces we draw: keeps the bundle small compared with the full "echarts" import.
+echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, SVGRenderer]);
+
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
+
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Colors come from the CSS tokens, so charts follow the light/dark theme.
 export function useChartColors() {
   const { theme } = useApp();
   return useMemo(
     () => ({
-      text: cssVar("--text-2"),
+      text: cssVar("--text"),
       muted: cssVar("--text-3"),
       grid: cssVar("--grid"),
       surface: cssVar("--surface"),
@@ -26,11 +35,13 @@ export function useChartColors() {
   );
 }
 
-function tooltip(colors: ReturnType<typeof useChartColors>) {
+type Colors = ReturnType<typeof useChartColors>;
+
+function tooltip(colors: Colors) {
   return {
     backgroundColor: colors.tooltipBg,
     borderColor: colors.border,
-    textStyle: { color: cssVar("--text"), fontFamily: "Geist, system-ui, sans-serif", fontSize: 12 },
+    textStyle: { color: colors.text, fontFamily: "Geist, system-ui, sans-serif", fontSize: 12 },
     extraCssText: "border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.25);",
   };
 }
@@ -38,20 +49,16 @@ function tooltip(colors: ReturnType<typeof useChartColors>) {
 function Chart({ option, height, label }: { option: object; height: number; label: string }) {
   return (
     <div className="chart-box money" role="img" aria-label={label}>
-      <ReactECharts option={option} notMerge style={{ height, width: "100%" }} opts={{ renderer: "svg" }} />
+      <ReactEChartsCore echarts={echarts} option={{ animation: !reducedMotion(), ...option }} notMerge style={{ height, width: "100%" }} opts={{ renderer: "svg" }} />
     </div>
   );
 }
 
-export function ValueChart({ points, height = 240 }: { points: { date: string; market: number; book: number }[]; height?: number }) {
+export function ValueChart({ points, currency, height = 240 }: { points: { date: string; market: number; book: number }[]; currency: string; height?: number }) {
   const colors = useChartColors();
   const option = {
     grid: { left: 8, right: 8, top: 12, bottom: 4, containLabel: true },
-    tooltip: {
-      trigger: "axis",
-      ...tooltip(colors),
-      valueFormatter: (value: number) => money(value),
-    },
+    tooltip: { trigger: "axis", ...tooltip(colors), valueFormatter: (value: number) => money(value, currency) },
     xAxis: {
       type: "category",
       boundaryGap: false,
@@ -60,62 +67,42 @@ export function ValueChart({ points, height = 240 }: { points: { date: string; m
       axisLine: { lineStyle: { color: colors.grid } },
       axisTick: { show: false },
     },
-    yAxis: {
-      type: "value",
-      scale: true,
-      axisLabel: { color: colors.muted, formatter: (value: number) => compactMoney(value) },
-      splitLine: { lineStyle: { color: colors.grid } },
-    },
+    yAxis: { type: "value", scale: true, axisLabel: { color: colors.muted, formatter: (value: number) => compactMoney(value, currency) }, splitLine: { lineStyle: { color: colors.grid } } },
     series: [
-      {
-        name: "Market value",
-        type: "line",
-        data: points.map((point) => point.market),
-        smooth: 0.25,
-        symbol: "none",
-        lineStyle: { width: 2.25, color: colors.accent },
-        areaStyle: { color: colors.accent, opacity: 0.12 },
-      },
-      {
-        name: "Book value",
-        type: "line",
-        data: points.map((point) => point.book),
-        symbol: "none",
-        lineStyle: { width: 1.5, type: "dashed", color: colors.muted },
-      },
+      { name: "Market value", type: "line", data: points.map((point) => point.market), smooth: 0.25, symbol: "none", lineStyle: { width: 2.25, color: colors.accent }, areaStyle: { color: colors.accent, opacity: 0.12 } },
+      { name: "Book value", type: "line", data: points.map((point) => point.book), symbol: "none", lineStyle: { width: 1.5, type: "dashed", color: colors.muted } },
     ],
   };
-  return <Chart option={option} height={height} label={`Portfolio value from ${money(points[0]?.market)} to ${money(points[points.length - 1]?.market)}`} />;
+  return <Chart option={option} height={height} label={`Portfolio value from ${money(points[0]?.market, currency)} to ${money(points[points.length - 1]?.market, currency)}`} />;
 }
 
-export function Donut({ data, height = 200 }: { data: { label: string; value: number }[]; height?: number }) {
+export function Donut({ data, currency, height = 200 }: { data: { label: string; value: number }[]; currency: string; height?: number }) {
   const colors = useChartColors();
   const option = {
     tooltip: {
       trigger: "item",
       ...tooltip(colors),
-      formatter: (params: { name: string; value: number; percent: number }) => `${params.name}<br/>${money(params.value)} · ${params.percent.toFixed(1)}%`,
+      formatter: (params: { name: string; value: number; percent: number }) => `${params.name}<br/>${money(params.value, currency)} · ${params.percent.toFixed(1)}%`,
     },
     color: colors.series,
     series: [
       {
         type: "pie",
         radius: ["62%", "86%"],
-        avoidLabelOverlap: true,
         label: { show: false },
         itemStyle: { borderColor: colors.surface, borderWidth: 2 },
         data: data.map((item) => ({ name: item.label, value: Math.round(item.value * 100) / 100 })),
       },
     ],
   };
-  return <Chart option={option} height={height} label={data.map((item) => `${item.label} ${money(item.value, "CAD", 0)}`).join(", ")} />;
+  return <Chart option={option} height={height} label={data.map((item) => `${item.label} ${money(item.value, currency, 0)}`).join(", ")} />;
 }
 
-export function FlowChart({ data, height = 220 }: { data: { month: string; contributions: number; investments: number }[]; height?: number }) {
+export function FlowChart({ data, currency, height = 220 }: { data: { month: string; contributions: number; investments: number }[]; currency: string; height?: number }) {
   const colors = useChartColors();
   const option = {
     grid: { left: 8, right: 8, top: 12, bottom: 4, containLabel: true },
-    tooltip: { trigger: "axis", ...tooltip(colors), valueFormatter: (value: number) => money(value) },
+    tooltip: { trigger: "axis", ...tooltip(colors), valueFormatter: (value: number) => money(value, currency) },
     xAxis: {
       type: "category",
       data: data.map((point) => point.month),
@@ -123,7 +110,7 @@ export function FlowChart({ data, height = 220 }: { data: { month: string; contr
       axisLine: { lineStyle: { color: colors.grid } },
       axisTick: { show: false },
     },
-    yAxis: { type: "value", axisLabel: { color: colors.muted, formatter: (value: number) => compactMoney(value) }, splitLine: { lineStyle: { color: colors.grid } } },
+    yAxis: { type: "value", axisLabel: { color: colors.muted, formatter: (value: number) => compactMoney(value, currency) }, splitLine: { lineStyle: { color: colors.grid } } },
     series: [
       { name: "Contributed", type: "bar", data: data.map((point) => point.contributions), itemStyle: { color: colors.series[0], borderRadius: [4, 4, 0, 0] }, barMaxWidth: 14 },
       { name: "Invested (net)", type: "bar", data: data.map((point) => point.investments), itemStyle: { color: colors.series[1], borderRadius: [4, 4, 0, 0] }, barMaxWidth: 14 },

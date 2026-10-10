@@ -166,18 +166,6 @@ export interface PortfolioPLRow extends Holding {
   children?: PortfolioPLRow[];
 }
 
-export interface ManualValuationPayload {
-  account_name: string;
-  platform_name?: string;
-  instrument_id?: number;
-  symbol?: string;
-  instrument_name?: string;
-  broad_category?: string;
-  precise_category?: string;
-  market_value: number;
-  snapshot_date: string;
-}
-
 export interface TimeSeriesPoint {
   month: string;
   contributions: number;
@@ -215,6 +203,7 @@ export interface PortfolioTotals {
   unrealized_pl: number;
   unrealized_pl_pct?: number | null;
   investable_cash: number;
+  fx_missing?: boolean;
 }
 
 export interface PortfolioOverview {

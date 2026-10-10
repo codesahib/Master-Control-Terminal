@@ -29,10 +29,13 @@ export function More() {
         <h2 className="sec-t">Appearance</h2>
         <ul className="list">
           <li className="list-row"><span className="li"><Icon name="sun" size={16} /></span><span className="grow">Theme</span><ThemeSwitch /></li>
-          <li className="list-row">
-            <span className="li"><Icon name="eyeOff" size={16} /></span>
-            <span className="grow">Privacy mode<span className="muted block">Blur amounts when sharing your screen</span></span>
-            <button className={`switch${privacy ? " on" : ""}`} type="button" role="switch" aria-checked={privacy} aria-label="Privacy mode" onClick={togglePrivacy} />
+          <li>
+            {/* The whole row is the switch, so the tap target is the full row height. */}
+            <button className="list-row row-btn" type="button" role="switch" aria-checked={privacy} onClick={togglePrivacy}>
+              <span className="li"><Icon name="eyeOff" size={16} /></span>
+              <span className="grow">Privacy mode<span className="muted block">Blur amounts when sharing your screen</span></span>
+              <span className={`switch${privacy ? " on" : ""}`} aria-hidden="true" />
+            </button>
           </li>
         </ul>
       </section>

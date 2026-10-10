@@ -10,17 +10,23 @@ interface DialogProps {
   footer?: ReactNode;
   aside?: ReactNode;
   size?: "sm" | "md" | "lg";
+  busy?: boolean;
 }
 
-// Native <dialog>: Escape, focus trap and backdrop come from the browser.
-export function Dialog({ title, subtitle, onClose, children, footer, aside, size = "md" }: DialogProps) {
+const FIRST_FIELD = "[data-autofocus], .dlg-main input:not([type=hidden]):not([type=checkbox]), .dlg-main select, .dlg-main textarea";
+
+// Native <dialog>: Escape, focus trap and backdrop come from the browser. `busy` blocks closing mid-save.
+export function Dialog({ title, subtitle, onClose, children, footer, aside, size = "md", busy = false }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
 
   useEffect(() => {
     const dialog = ref.current;
     const opener = document.activeElement as HTMLElement | null;
-    if (dialog && !dialog.open) dialog.showModal();
+    if (dialog && !dialog.open) {
+      dialog.showModal();
+      dialog.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
+    }
     return () => {
       if (dialog?.open) dialog.close();
       opener?.focus?.();
@@ -32,9 +38,10 @@ export function Dialog({ title, subtitle, onClose, children, footer, aside, size
       ref={ref}
       className={`dlg dlg-${size}${aside ? " has-aside" : ""}`}
       aria-labelledby={titleId}
+      aria-busy={busy}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        if (!busy) onClose();
       }}
     >
       <header className="dlg-h">
@@ -43,7 +50,7 @@ export function Dialog({ title, subtitle, onClose, children, footer, aside, size
           {subtitle && <p className="sub">{subtitle}</p>}
         </div>
         <kbd className="hide-touch">Esc</kbd>
-        <button className="btn btn-g icon-btn" type="button" onClick={onClose} aria-label="Close">
+        <button className="btn btn-g icon-btn" type="button" onClick={onClose} disabled={busy} aria-label="Close">
           <Icon name="close" />
         </button>
       </header>
@@ -58,7 +65,7 @@ export function Dialog({ title, subtitle, onClose, children, footer, aside, size
 
 interface ConfirmProps {
   title: string;
-  message: string;
+  message: ReactNode;
   confirmLabel: string;
   danger?: boolean;
   onConfirm: () => Promise<void> | void;
@@ -85,11 +92,12 @@ export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm,
     <Dialog
       title={title}
       size="sm"
+      busy={busy}
       onClose={onClose}
       footer={
         <>
-          <button className="btn btn-s" type="button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className={`btn ${danger ? "btn-danger" : "btn-p"}`} type="button" onClick={confirm} disabled={busy} autoFocus>
+          <button className="btn btn-s" type="button" onClick={onClose} disabled={busy} data-autofocus>Cancel</button>
+          <button className={`btn ${danger ? "btn-danger" : "btn-p"}`} type="button" onClick={confirm} disabled={busy}>
             {busy ? "Working…" : confirmLabel}
           </button>
         </>

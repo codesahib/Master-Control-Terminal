@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api/client";
 import { ACCOUNT_NAMES } from "../components/Shell";
 import { useApp } from "../context";
@@ -15,8 +15,6 @@ export function Room() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string>();
 
-  useEffect(() => setDrafts({}), [query.data]);
-
   const rows = (query.data || []).filter((row) => row.account === account).sort((a, b) => Number(b.tax_year) - Number(a.tax_year));
 
   async function save(row: ContributionLimitSetting) {
@@ -30,6 +28,7 @@ export function Room() {
     try {
       await api.put(`/contribution-limits/${row.account}/${row.tax_year}`, { new_room: value });
       notify(`${row.account} ${row.tax_year} room saved.`);
+      setDrafts(({ [key]: _saved, ...rest }) => rest);
       refresh();
     } catch (error) {
       notify(errorMessage(error, "Contribution limit failed to save."), "error");

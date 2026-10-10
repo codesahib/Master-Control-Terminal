@@ -14,6 +14,11 @@ import { Overview } from "./pages/Overview";
 import { Room } from "./pages/Room";
 import { useRoute } from "./router";
 
+function ConfirmHost() {
+  const { confirm, closeConfirm } = useApp();
+  return confirm ? <ConfirmDialog {...confirm} onClose={closeConfirm} /> : null;
+}
+
 function ModalHost() {
   const { modal, closeModal, openModal, refresh, platforms } = useApp();
   const actions = useRecordActions();
@@ -45,8 +50,6 @@ function ModalHost() {
       );
     case "valuation":
       return <ManualValuationModal row={modal.row} onClose={closeModal} onSaved={refresh} />;
-    case "confirm":
-      return <ConfirmDialog {...modal} onClose={closeModal} />;
     case "new":
       return (
         <Dialog title="Add" size="sm" onClose={closeModal}>
@@ -64,7 +67,7 @@ function Routes() {
   const { path, parts } = useRoute();
   if (parts[0] === "accounts" && parts[1] && ACCOUNT_NAMES.includes(parts[1].toUpperCase())) {
     const name = parts[1].toUpperCase();
-    return <Shell title={name}><Account name={name} /></Shell>;
+    return <Shell title={name}><Account key={name} name={name} /></Shell>;
   }
   switch (path) {
     case "/holdings":
@@ -87,6 +90,7 @@ export default function App() {
     <AppProvider>
       <Routes />
       <ModalHost />
+      <ConfirmHost />
     </AppProvider>
   );
 }

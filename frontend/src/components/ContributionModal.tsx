@@ -1,6 +1,6 @@
 import { FormEvent, useId, useState } from "react";
 import { api } from "../api/client";
-import { errorMessage, money } from "../lib/format";
+import { errorMessage, money, today } from "../lib/format";
 import { Contribution } from "../types";
 import { Dialog } from "./Dialog";
 import { Field, MoneyInput, PlatformSelect, Section, Segmented } from "./form";
@@ -20,7 +20,7 @@ interface Props {
 export function ContributionModal({ onClose, onSaved, onDelete, defaultAccount = "RRSP", contribution, platforms = platformOptions }: Props) {
   const formId = useId();
   const [form, setForm] = useState({
-    transaction_date: contribution?.transaction_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+    transaction_date: contribution?.transaction_date?.slice(0, 10) || today(),
     account_name: contribution?.account_name || defaultAccount,
     platform_name: contribution ? contribution.platform_name || "" : platforms[0] || "",
     amount: contribution ? String(contribution.amount) : "",
@@ -59,6 +59,7 @@ export function ContributionModal({ onClose, onSaved, onDelete, defaultAccount =
       title={contribution ? "Edit contribution" : "New contribution"}
       subtitle="Money you put into a registered account. It uses contribution room."
       size="sm"
+      busy={isSaving}
       onClose={onClose}
       footer={
         <>
@@ -66,7 +67,7 @@ export function ContributionModal({ onClose, onSaved, onDelete, defaultAccount =
             <button className="btn btn-danger-g" type="button" onClick={onDelete}><Icon name="trash" size={16} />Delete</button>
           )}
           <span className="grow" />
-          <button className="btn btn-s" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-s" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
           <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save contribution"}</button>
         </>
       }

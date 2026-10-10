@@ -1,11 +1,11 @@
 import { useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { useApp } from "../context";
-import { downloadExport, restoreBackup } from "../lib/actions";
+import { downloadExport, uploadBackup } from "../lib/actions";
 import { errorMessage, timeAgo } from "../lib/format";
 
 export function DataActions() {
-  const { health, refreshPrices, refreshingPrices, openModal, notify, refresh } = useApp();
+  const { health, refreshPrices, refreshingPrices, openConfirm, notify, refresh } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -20,18 +20,29 @@ export function DataActions() {
     }
   }
 
-  function pickedFile(file: File | undefined) {
+  // Step 1: save current data. Step 2: confirm, naming the saved file, before anything is replaced.
+  async function pickedFile(file: File | undefined) {
     if (fileRef.current) fileRef.current.value = "";
     if (!file) return;
-    openModal({
-      kind: "confirm",
+    let savedAs: string;
+    try {
+      savedAs = await downloadExport("pre-restore-backup");
+    } catch (error) {
+      notify(errorMessage(error, "Could not save a backup of current data, so nothing was restored."), "error");
+      return;
+    }
+    openConfirm({
       title: "Replace all data with this backup?",
-      message: `"${file.name}" will replace every account, transaction, limit and price. Your current data downloads first as a pre-restore backup, so you can undo this by importing that file.`,
-      confirmLabel: "Download backup and restore",
+      message: (
+        <>
+          Your current data was saved as <b>{savedAs}</b>. Check that it is in your downloads. Restoring <b>{file.name}</b> replaces every account, transaction, limit and price. To undo, import the saved file.
+        </>
+      ),
+      confirmLabel: "Replace data",
       danger: true,
       onConfirm: async () => {
-        const savedAs = await restoreBackup(file);
-        notify(`Backup restored. Previous data saved as ${savedAs}.`);
+        await uploadBackup(file);
+        notify("Backup restored.");
         refresh();
       },
     });

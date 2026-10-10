@@ -1,6 +1,6 @@
 import { FormEvent, useId, useState } from "react";
 import { api } from "../api/client";
-import { errorMessage, money } from "../lib/format";
+import { errorMessage, money, today } from "../lib/format";
 import { PortfolioPLRow } from "../types";
 import { Dialog } from "./Dialog";
 import { Field, MoneyInput, Section } from "./form";
@@ -13,11 +13,12 @@ interface Props {
 
 export function ManualValuationModal({ row, onClose, onSaved }: Props) {
   const formId = useId();
-  const child = row.children?.[0];
+  // Opened for a single platform row; a grouped row with one child carries its platform on that child.
+  const child = row.children?.length === 1 ? row.children[0] : undefined;
   const accountName = child?.account_name || row.account_name;
   const platformName = row.platform_name || child?.platform_name;
   const [marketValue, setMarketValue] = useState(String(row.market_value ?? row.book_value));
-  const [snapshotDate, setSnapshotDate] = useState(row.manual_valuation_date || new Date().toISOString().slice(0, 10));
+  const [snapshotDate, setSnapshotDate] = useState(row.manual_valuation_date || today());
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -51,11 +52,12 @@ export function ManualValuationModal({ row, onClose, onSaved }: Props) {
       title="Update value"
       subtitle={`${row.name || row.symbol} · ${accountName}${platformName ? ` · ${platformName}` : ""}`}
       size="sm"
+      busy={isSaving}
       onClose={onClose}
       footer={
         <>
           <span className="grow" />
-          <button className="btn btn-s" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-s" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
           <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save value"}</button>
         </>
       }

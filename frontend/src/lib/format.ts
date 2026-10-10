@@ -92,10 +92,21 @@ export const STATUS_LABELS: Record<string, { label: string; tone: string }> = {
 export function errorMessage(error: any, fallback = "Something went wrong. Try again.") {
   const detail = error?.response?.data?.detail;
   if (Array.isArray(detail)) {
-    return detail.map((item) => (item?.loc ? `${item.loc.filter((part: unknown) => part !== "body").join(".")}: ${item.msg}` : item?.msg || String(item))).join("; ");
+    return detail
+      .map((item) => {
+        const msg = String(item?.msg ?? item).replace(/^Value error, /, "");
+        const field = Array.isArray(item?.loc) ? item.loc.filter((part: unknown) => part !== "body").join(".") : "";
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .join("; ");
   }
-  if (typeof detail === "string" && detail) return detail;
+  if (typeof detail === "string" && detail) return detail.replace(/^Value error, /, "");
   if (error?.response?.status === 404) return "Not found.";
   if (error?.message === "Network Error") return "Cannot reach the API. Is it running?";
   return fallback;
+}
+
+// Local calendar date (YYYY-MM-DD); toISOString would give the UTC date and roll Dec 31 evenings into next year.
+export function today() {
+  return new Date().toLocaleDateString("en-CA");
 }
