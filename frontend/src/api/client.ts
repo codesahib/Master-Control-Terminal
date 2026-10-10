@@ -1,7 +1,14 @@
 import axios from "axios";
 
+const apiToken = import.meta.env.VITE_API_TOKEN;
+
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000",
+  // The API rejects requests without these headers; custom headers also force a CORS preflight.
+  headers: {
+    "X-Requested-With": "master-terminal",
+    ...(apiToken ? { "X-API-Token": apiToken } : {}),
+  },
 });
 
 let pendingRequests = 0;
