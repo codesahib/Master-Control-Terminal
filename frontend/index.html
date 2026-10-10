@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Master Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script>
+      // Apply the saved theme before first paint so there is no flash.
+      try {
+        var pref = localStorage.getItem("mt-theme") || "system";
+        var dark = pref === "dark" || (pref === "system" && !matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        if (localStorage.getItem("mt-privacy") === "1") document.documentElement.classList.add("privacy");
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

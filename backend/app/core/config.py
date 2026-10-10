@@ -18,7 +18,7 @@ def _candidate_env_paths() -> tuple[Path, ...]:
     )
 
 
-def _database_url_from_env_file(env_paths: Iterable[Path], key_name: str) -> str | None:
+def _env_file_value(env_paths: Iterable[Path], key_name: str) -> str | None:
     for env_path in dict.fromkeys(env_paths):
         if not env_path.exists():
             continue
@@ -47,18 +47,40 @@ def load_database_url(
     environ: Mapping[str, str] = os.environ,
     env_paths: Iterable[Path] | None = None,
 ) -> str:
+    paths = tuple(env_paths) if env_paths is not None else _candidate_env_paths()
     database_url = (
         environ.get("DATABASE_POOLER_URL")
         or environ.get("DATABASE_URL")
-        or _database_url_from_env_file(env_paths or _candidate_env_paths(), "DATABASE_POOLER_URL")
-        or _database_url_from_env_file(env_paths or _candidate_env_paths(), "DATABASE_URL")
+        or _env_file_value(paths, "DATABASE_POOLER_URL")
+        or _env_file_value(paths, "DATABASE_URL")
     )
     return _normalize_database_url(database_url or DEFAULT_DATABASE_URL)
+
+
+def load_api_token(
+    environ: Mapping[str, str] = os.environ,
+    env_paths: Iterable[Path] | None = None,
+) -> str | None:
+    paths = tuple(env_paths) if env_paths is not None else _candidate_env_paths()
+    return environ.get("API_TOKEN") or _env_file_value(paths, "API_TOKEN") or None
+
+
+def load_cors_origins(environ: Mapping[str, str] = os.environ) -> list[str]:
+    raw = environ.get("CORS_ORIGINS") or "http://localhost:5173"
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def load_allowed_hosts(environ: Mapping[str, str] = os.environ) -> list[str]:
+    raw = environ.get("ALLOWED_HOSTS") or "localhost,127.0.0.1"
+    return [host.strip() for host in raw.split(",") if host.strip()]
 
 
 class Settings(BaseModel):
     app_name: str = "Master Terminal API"
     database_url: str = load_database_url()
+    api_token: str | None = load_api_token()
+    cors_origins: list[str] = load_cors_origins()
+    allowed_hosts: list[str] = load_allowed_hosts()
 
 
 settings = Settings()

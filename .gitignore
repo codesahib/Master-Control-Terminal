@@ -17,3 +17,5 @@ backend/.venv/
 Thumbs.db
 
 .codex
+*.dump
+audit-output/

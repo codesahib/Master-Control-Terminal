@@ -1,36 +1,47 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useId, useState } from "react";
 import { api } from "../api/client";
+import { errorMessage, money, today, TYPE_LABELS } from "../lib/format";
 import { AccountTransaction, AccountTransactionType, ContributionFunding, FundingCashSource, SymbolSearchResult } from "../types";
-import {
-  accountTransactionOptions,
-  categoryOptions,
-  platformOptions,
-  preciseOptionsFor,
-} from "./transactionFormConfig";
+import { Dialog } from "./Dialog";
+import { CURRENCIES, Field, MoneyInput, PlatformSelect, Section, Segmented } from "./form";
+import { Icon } from "./Icon";
+import { SymbolPicker } from "./SymbolPicker";
+import { ACCOUNT_NAMES } from "./Shell";
+import { accountTransactionOptions, categoryOptions, platformOptions, preciseOptionsFor } from "./transactionFormConfig";
 
 interface Props {
   onClose: () => void;
-  onSaved: () => Promise<void>;
+  onSaved: () => Promise<void> | void;
+  onDelete?: () => void;
   defaultAccount?: string;
   transaction?: AccountTransaction;
   defaultTransactionType?: AccountTransactionType;
   platforms?: string[];
 }
 
+const AMOUNT_LABELS: Partial<Record<AccountTransactionType, string>> = {
+  investment_buy: "Total cost",
+  investment_sell: "Proceeds",
+  dividend_interest: "Amount received",
+  dividend_reinvestment: "Dividend used",
+  transfer: "Amount moved",
+  withdrawal: "Amount withdrawn",
+};
+
 export function AccountTransactionModal({
   onClose,
   onSaved,
+  onDelete,
   defaultAccount = "RRSP",
   transaction,
   defaultTransactionType = "investment_buy",
   platforms = platformOptions,
 }: Props) {
+  const formId = useId();
   const defaultPlatform = platforms[0] || "";
-  const [transactionType, setTransactionType] = useState<AccountTransactionType>(
-    transaction?.transaction_type || defaultTransactionType
-  );
+  const [transactionType, setTransactionType] = useState<AccountTransactionType>(transaction?.transaction_type || defaultTransactionType);
   const [form, setForm] = useState({
-    transaction_date: transaction?.transaction_date || new Date().toISOString().slice(0, 10),
+    transaction_date: transaction?.transaction_date || today(),
     account_name: transaction?.account_name || defaultAccount,
     platform_name: transaction ? transaction.platform_name || "" : defaultPlatform,
     source_platform_name: transaction?.source_platform_name || "",
@@ -40,7 +51,7 @@ export function AccountTransactionModal({
     symbol: transaction?.symbol || "",
     instrument_name: "",
     is_custom_symbol: false,
-    amount: String(transaction?.amount ?? 0),
+    amount: String(transaction?.amount ?? ""),
     currency: transaction?.currency || "CAD",
     source_amount: transaction?.source_amount ? String(transaction.source_amount) : "",
     source_currency: transaction?.source_currency || "CAD",
@@ -49,14 +60,10 @@ export function AccountTransactionModal({
     fee_currency: transaction?.fee_currency || transaction?.currency || "CAD",
     notes: transaction?.notes || "",
   });
-  const platformChoices = transaction?.platform_name && !platforms.includes(transaction.platform_name)
-    ? [transaction.platform_name, ...platforms]
-    : platforms;
+  const platformChoices = transaction?.platform_name && !platforms.includes(transaction.platform_name) ? [transaction.platform_name, ...platforms] : platforms;
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [symbolQuery, setSymbolQuery] = useState(transaction?.symbol || "");
-  const [symbolResults, setSymbolResults] = useState<SymbolSearchResult[]>([]);
-  const [isSearchingSymbols, setIsSearchingSymbols] = useState(false);
   const [contributions, setContributions] = useState<ContributionFunding[]>([]);
   const [fundingCashSources, setFundingCashSources] = useState<FundingCashSource[]>(() => {
     const sources = new Map<string, FundingCashSource>();
@@ -70,17 +77,19 @@ export function AccountTransactionModal({
     return [...sources.values()];
   });
 
-  const requiresSymbol = useMemo(
-    () => ["investment_buy", "investment_sell", "dividend_reinvestment", "quantity_adjustment"].includes(transactionType),
-    [transactionType]
-  );
+  const requiresSymbol = ["investment_buy", "investment_sell", "dividend_reinvestment", "quantity_adjustment"].includes(transactionType);
   const requiresFunding = ["investment_buy", "transfer"].includes(transactionType);
   const isCurrencyExchange = transactionType === "currency_exchange";
+  const isWithdrawal = transactionType === "withdrawal";
+  const isAdjustment = transactionType === "quantity_adjustment";
+  const isTransfer = transactionType === "transfer";
   const supportsSourceCash = ["investment_buy", "dividend_reinvestment"].includes(transactionType);
+  const showCategories = !isCurrencyExchange && !isWithdrawal && !isTransfer;
+  const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
   useEffect(() => {
     if (!transaction && defaultPlatform) {
-      setForm((current) => current.platform_name ? current : { ...current, platform_name: defaultPlatform });
+      setForm((current) => (current.platform_name ? current : { ...current, platform_name: defaultPlatform }));
     }
   }, [defaultPlatform, transaction]);
 
@@ -91,35 +100,20 @@ export function AccountTransactionModal({
     }
     api
       .get<ContributionFunding[]>("/available-contributions", { params: { account: form.account_name, exclude_transaction_id: transaction?.id } })
-      .then((response) => setContributions(response.data));
-  }, [form.account_name, requiresFunding]);
+      .then((response) => setContributions(response.data))
+      .catch(() => setContributions([]));
+  }, [form.account_name, requiresFunding, transaction?.id]);
 
-  useEffect(() => {
-    if (!requiresSymbol || form.is_custom_symbol || symbolQuery.trim().length < 2) {
-      setSymbolResults([]);
-      return;
+  async function selectSymbol(candidate: SymbolSearchResult) {
+    setError("");
+    try {
+      // Search returns unsaved Yahoo candidates (id null); save the chosen one first.
+      const symbol = candidate.id == null ? (await api.post<SymbolSearchResult>("/symbols", candidate)).data : candidate;
+      set({ instrument_id: symbol.id ?? undefined, symbol: symbol.symbol, currency: symbol.currency || form.currency, instrument_name: symbol.name || form.instrument_name });
+      setSymbolQuery(symbol.provider_symbol);
+    } catch (exc: any) {
+      setError(exc?.response?.status === 422 ? "This listing's currency isn't supported. Use a custom symbol." : errorMessage(exc, "Could not save that symbol."));
     }
-    const timeout = window.setTimeout(() => {
-      setIsSearchingSymbols(true);
-      api
-        .get<SymbolSearchResult[]>("/symbols/search", { params: { q: symbolQuery.trim() } })
-        .then((response) => setSymbolResults(response.data))
-        .catch(() => setSymbolResults([]))
-        .finally(() => setIsSearchingSymbols(false));
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [requiresSymbol, symbolQuery, form.is_custom_symbol]);
-
-  function selectSymbol(symbol: SymbolSearchResult) {
-    setForm({
-      ...form,
-      instrument_id: symbol.id,
-      symbol: symbol.symbol,
-      currency: symbol.currency || form.currency,
-      instrument_name: symbol.name || form.instrument_name,
-    });
-    setSymbolQuery(symbol.provider_symbol);
-    setSymbolResults([]);
   }
 
   function toggleFundingCashSource(contribution: ContributionFunding) {
@@ -131,35 +125,31 @@ export function AccountTransactionModal({
   }
 
   function updateFundingAmount(platformName: string, amount: string) {
-    setFundingCashSources((current) =>
-      current.map((funding) =>
-        funding.platform_name === platformName ? { ...funding, amount: Number(amount) || 0 } : funding
-      )
-    );
+    setFundingCashSources((current) => current.map((funding) => (funding.platform_name === platformName ? { ...funding, amount: Number(amount) || 0 } : funding)));
   }
 
-  function useRemainingAmount(contribution: ContributionFunding) {
-    const total = Number((supportsSourceCash && form.source_amount) || form.amount || 0) + Number(form.fees || 0);
-    const allocatedElsewhere = fundingCashSources
-      .filter((funding) => funding.platform_name !== contribution.platform_name)
-      .reduce((sum, funding) => sum + funding.amount, 0);
-    const amount = Math.max(0, Math.min(contribution.remaining_amount, total - allocatedElsewhere));
+  const cashNeeded = Number((supportsSourceCash && form.source_amount) || form.amount || 0) + Number(form.fees || 0);
+  const fundingTotal = fundingCashSources.reduce((sum, funding) => sum + funding.amount, 0);
+
+  function fillRemaining(contribution: ContributionFunding) {
+    const allocatedElsewhere = fundingCashSources.filter((funding) => funding.platform_name !== contribution.platform_name).reduce((sum, funding) => sum + funding.amount, 0);
+    const amount = Math.max(0, Math.min(contribution.remaining_amount, cashNeeded - allocatedElsewhere));
     updateFundingAmount(contribution.platform_name, String(Math.round(amount * 100) / 100));
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    if (!form.transaction_date || !form.account_name || !form.platform_name || form.amount === "") {
-      setError("Amount, date, account, and platform are required");
+    if (!form.transaction_date || !form.account_name || !form.platform_name || (!isAdjustment && form.amount === "")) {
+      setError("Amount, date, account, and platform are required.");
       return;
     }
     if (requiresFunding && fundingCashSources.some((funding) => funding.amount <= 0)) {
-      setError("Funding source amounts must be greater than zero");
+      setError("Funding source amounts must be greater than zero.");
       return;
     }
-    if (transactionType === "transfer" && !form.source_platform_name) {
-      setError("Source platform is required for transfers");
+    if (isTransfer && !form.source_platform_name) {
+      setError("Source platform is required for transfers.");
       return;
     }
 
@@ -170,171 +160,222 @@ export function AccountTransactionModal({
         transaction_date: form.transaction_date,
         account_name: form.account_name || null,
         platform_name: form.platform_name || null,
-        source_platform_name: transactionType === "transfer" ? form.source_platform_name : null,
-        broad_category: form.broad_category || null,
-        precise_category: form.precise_category || null,
+        source_platform_name: isTransfer ? form.source_platform_name : null,
+        broad_category: showCategories ? form.broad_category || null : null,
+        precise_category: showCategories ? form.precise_category || null : null,
         instrument_id: requiresSymbol ? form.instrument_id || null : null,
         symbol: requiresSymbol ? form.symbol || null : null,
-        instrument_name: form.instrument_name || null,
-        amount: Number(form.amount),
+        instrument_name: requiresSymbol ? form.instrument_name || null : null,
+        amount: isAdjustment ? 0 : Number(form.amount),
         currency: form.currency,
         source_amount: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? Number(form.source_amount) : null,
         source_currency: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? form.source_currency : null,
         quantity: requiresSymbol && form.quantity ? Number(form.quantity) : null,
-        fees: Number(form.fees || 0),
+        fees: isAdjustment || isWithdrawal ? 0 : Number(form.fees || 0),
         fee_currency: form.fee_currency || form.currency,
         notes: form.notes || null,
         is_custom_symbol: requiresSymbol ? form.is_custom_symbol : false,
         funding_cash_sources: requiresFunding ? fundingCashSources : [],
       };
-
-      if (transaction) {
-        await api.put(`/account-transactions/${transaction.id}`, payload);
-      } else {
-        await api.post("/account-transactions", payload);
-      }
-
+      if (transaction) await api.put(`/account-transactions/${transaction.id}`, payload);
+      else await api.post("/account-transactions", payload);
       await onSaved();
       onClose();
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail;
-      console.error("Failed to save account transaction", { detail, error: e });
-      setError(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail?.toString() || "Failed to save account transaction");
+    } catch (exc) {
+      setError(errorMessage(exc, "Failed to save the transaction."));
     } finally {
       setIsSaving(false);
     }
   }
 
+  let step = 1;
+  const amount = Number(form.amount || 0);
+  const qty = Number(form.quantity || 0);
+  const fees = Number(form.fees || 0);
+  const summary = (
+    <>
+      <span className="sum-k">Summary</span>
+      <div>
+        <div className="sum-head">
+          {TYPE_LABELS[transactionType]}
+          {requiresSymbol && qty ? <span className="money"> {qty}</span> : ""}
+          {requiresSymbol && form.symbol ? ` ${form.symbol}` : ""}
+        </div>
+        <div className="sub">{form.account_name} · {isTransfer ? `${form.source_platform_name || "?"} to ${form.platform_name || "?"}` : form.platform_name || "No platform"}</div>
+      </div>
+      <dl className="sum-rows money">
+        {isCurrencyExchange ? (
+          <>
+            <div><dt>You give</dt><dd className="num">{money(Number(form.source_amount || 0), form.source_currency)}</dd></div>
+            <div><dt>You get</dt><dd className="num">{money(amount, form.currency)}</dd></div>
+            {Number(form.source_amount) > 0 && <div><dt>Rate</dt><dd className="num">{(amount / Number(form.source_amount)).toFixed(4)}</dd></div>}
+          </>
+        ) : (
+          <>
+            {!isAdjustment && <div><dt>Amount</dt><dd className="num">{money(amount, form.currency)}</dd></div>}
+            {!isAdjustment && !isWithdrawal && <div><dt>Fees</dt><dd className="num">{money(fees, form.fee_currency)}</dd></div>}
+            {requiresSymbol && qty > 0 && amount > 0 && <div><dt>Per unit</dt><dd className="num">{money(amount / qty, form.currency, 4)}</dd></div>}
+          </>
+        )}
+      </dl>
+      {requiresFunding && fundingCashSources.length > 0 && (
+        <div className={`sum-check ${Math.abs(fundingTotal - cashNeeded) < 0.005 ? "ok" : "warn"}`}>
+          <Icon name={Math.abs(fundingTotal - cashNeeded) < 0.005 ? "check" : "warn"} size={16} />
+          <span className="money">Funding {money(fundingTotal)} of {money(cashNeeded)} needed</span>
+        </div>
+      )}
+      {requiresSymbol && !form.symbol && <div className="sum-check warn"><Icon name="warn" size={16} />Pick a symbol</div>}
+    </>
+  );
+
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="account-transaction-modal-title">
-      <div className="modal-content panel">
-        <div className="header">
-          <h3 id="account-transaction-modal-title">{transaction ? "Edit Account Transaction" : "New Account Transaction"}</h3>
-          <button className="btn-secondary btn" type="button" onClick={onClose}>Close</button>
+    <Dialog
+      title={transaction ? "Edit transaction" : "New transaction"}
+      subtitle="Pick a type. The form only shows the fields that type needs."
+      size="lg"
+      busy={isSaving}
+      onClose={onClose}
+      aside={summary}
+      footer={
+        <>
+          {transaction && onDelete && (
+            <button className="btn btn-danger-g" type="button" onClick={onDelete}><Icon name="trash" size={16} />Delete</button>
+          )}
+          <span className="grow" />
+          <button className="btn btn-s" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
+          <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save transaction"}</button>
+        </>
+      }
+    >
+      <form id={formId} className="form" onSubmit={submit}>
+        <div className="types" role="radiogroup" aria-label="Transaction type">
+          {accountTransactionOptions.map((option) => (
+            <button key={option.value} type="button" role="radio" aria-checked={transactionType === option.value} className={`type${transactionType === option.value ? " on" : ""}`} onClick={() => setTransactionType(option.value)}>
+              <Icon name={option.value} />
+              {option.label}
+            </button>
+          ))}
         </div>
 
-        <form onSubmit={submit}>
-          <div className="field field-spaced">
-            <label htmlFor="account-transaction-type">What transaction are you recording?</label>
-            <select id="account-transaction-type" value={transactionType} onChange={(e) => setTransactionType(e.target.value as AccountTransactionType)}>
-              {accountTransactionOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
+        <Section n={step++} title="Where">
+          <Segmented label="Account" value={form.account_name} options={ACCOUNT_NAMES} onChange={(account_name) => { set({ account_name }); setFundingCashSources([]); }} />
+          <Field label="Date" htmlFor="tx-date"><input id="tx-date" className="inp" type="date" required value={form.transaction_date} onChange={(event) => set({ transaction_date: event.target.value })} /></Field>
+          {isTransfer ? (
+            <>
+              <Field label="From platform" htmlFor="tx-from"><PlatformSelect id="tx-from" required value={form.source_platform_name} platforms={platformChoices} onChange={(source_platform_name) => { set({ source_platform_name }); setFundingCashSources([]); }} /></Field>
+              <Field label="To platform" htmlFor="tx-platform"><PlatformSelect id="tx-platform" required value={form.platform_name} platforms={platformChoices} onChange={(platform_name) => set({ platform_name })} /></Field>
+            </>
+          ) : (
+            <Field label="Platform" htmlFor="tx-platform" span={6}><PlatformSelect id="tx-platform" required value={form.platform_name} platforms={platformChoices} onChange={(platform_name) => set({ platform_name })} /></Field>
+          )}
+        </Section>
 
-          <div className="form-grid">
-            <div className="field"><label htmlFor="account-transaction-date">Date</label><input id="account-transaction-date" type="date" required value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
-            <div className="field"><label htmlFor="account-transaction-amount">{isCurrencyExchange ? "To Amount" : "Amount"}</label><input id="account-transaction-amount" type="number" min={transactionType === "investment_buy" ? "0" : "0.000001"} step="0.000001" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-            <div className="field"><label htmlFor="account-transaction-currency">{isCurrencyExchange ? "To Currency" : "Currency"}</label><select id="account-transaction-currency" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-            <div className="field"><label htmlFor="account-transaction-account">Account</label><select id="account-transaction-account" required value={form.account_name} onChange={(e) => { setForm({ ...form, account_name: e.target.value }); setFundingCashSources([]); }}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
-            <div className="field">
-              <label htmlFor="account-transaction-platform">{transactionType === "transfer" ? "To Platform" : "Platform"}</label>
-              <select id="account-transaction-platform" required value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-                <option value="">Select platform</option>
-                {platformChoices.map((platform) => (
-                  <option key={platform} value={platform}>{platform}</option>
-                ))}
-              </select>
-            </div>
-            {transactionType === "transfer" && <div className="field"><label htmlFor="account-transaction-source-platform">From Platform</label><select id="account-transaction-source-platform" required value={form.source_platform_name} onChange={(e) => { setForm({ ...form, source_platform_name: e.target.value }); setFundingCashSources([]); }}><option value="">Select source platform</option>{platformChoices.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></div>}
-            {isCurrencyExchange && <>
-              <div className="field"><label htmlFor="account-transaction-source-amount">From Amount</label><input id="account-transaction-source-amount" type="number" min="0.01" step="0.01" inputMode="decimal" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
-              <div className="field"><label htmlFor="account-transaction-source-currency">From Currency</label><select id="account-transaction-source-currency" value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-            </>}
-            {supportsSourceCash && <>
-              <div className="field"><label htmlFor="account-transaction-source-amount">Cash Used (optional)</label><input id="account-transaction-source-amount" type="number" min="0.000001" step="0.000001" inputMode="decimal" value={form.source_amount} onChange={(e) => setForm({ ...form, source_amount: e.target.value })} /></div>
-              <div className="field"><label htmlFor="account-transaction-source-currency">Cash Currency</label><select id="account-transaction-source-currency" value={form.source_currency} onChange={(e) => setForm({ ...form, source_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-            </>}
-            {requiresFunding && (
-              <div className="field field-span">
-                <span className="field-label">Funding Sources (optional)</span>
-                {contributions.filter((contribution) => transactionType !== "transfer" || contribution.platform_name.toLowerCase() === form.source_platform_name.toLowerCase()).map((contribution) => {
-                  const funding = fundingCashSources.find((item) => item.platform_name === contribution.platform_name);
-                  return (
-                    <div className="funding-source" key={contribution.id}>
-                      <label>
-                        <input type="checkbox" checked={Boolean(funding)} onChange={() => toggleFundingCashSource(contribution)} />
-                        {" "}{contribution.platform_name} · {contribution.source_label} · ${contribution.remaining_amount.toFixed(2)} remaining
-                      </label>
-                      {funding && <>
-                        <input aria-label={`Funding amount for ${contribution.platform_name}`} type="number" min="0.01" step="0.01" inputMode="decimal" required value={funding.amount || ""} onChange={(e) => updateFundingAmount(contribution.platform_name, e.target.value)} />
-                        <button type="button" className="btn-secondary btn" onClick={() => useRemainingAmount(contribution)}>Use remaining amount</button>
-                      </>}
-                    </div>
-                  );
-                })}
-              </div>
+        {(requiresSymbol || showCategories) && (
+          <Section n={step++} title="What">
+            {requiresSymbol && (
+              <Field label="Symbol" htmlFor="tx-symbol" span={6}>
+                <SymbolPicker
+                  query={symbolQuery}
+                  onQueryChange={(value) => { setSymbolQuery(value); set({ instrument_id: undefined, symbol: value }); }}
+                  isCustom={form.is_custom_symbol}
+                  onCustomChange={(is_custom_symbol) => set({ is_custom_symbol })}
+                  selected={Boolean(form.instrument_id)}
+                  selectedName={form.instrument_name}
+                  onSelect={selectSymbol}
+                />
+              </Field>
             )}
-            {!isCurrencyExchange && <div className="field">
-              <label htmlFor="account-transaction-broad-category">Broad Category</label>
-              <select
-                id="account-transaction-broad-category"
-                value={form.broad_category}
-                onChange={(e) => {
-                  const broadCategory = e.target.value;
-                  setForm({
-                    ...form,
-                    broad_category: broadCategory,
-                    precise_category: preciseOptionsFor(broadCategory)[0] || "",
-                  });
-                }}
-              >
-                <option value="">None</option>
-                {Object.keys(categoryOptions).map((category) => (
-                  <option key={category} value={category}>{category}</option>
-                ))}
-              </select>
-            </div>}
-            {!isCurrencyExchange && <div className="field">
-              <label htmlFor="account-transaction-precise-category">Precise Category</label>
-              <select id="account-transaction-precise-category" value={form.precise_category} onChange={(e) => setForm({ ...form, precise_category: e.target.value })}>
-                <option value="">None</option>
-                {preciseOptionsFor(form.broad_category).map((category) => (
-                  <option key={category} value={category}>{category}</option>
-                ))}
-              </select>
-            </div>}
-            {requiresSymbol && <div className="field symbol-field">
-              <label htmlFor="account-transaction-symbol">Symbol</label>
-              <input
-                id="account-transaction-symbol"
-                required
-                value={symbolQuery}
-                onChange={(e) => {
-                  setSymbolQuery(e.target.value);
-                  setForm({ ...form, instrument_id: undefined, symbol: e.target.value });
-                }}
-              />
-              <label className="inline-check">
-                <input type="checkbox" checked={form.is_custom_symbol} onChange={(e) => setForm({ ...form, is_custom_symbol: e.target.checked })} />
-                Manual/custom symbol
-              </label>
-              {isSearchingSymbols && <small>Searching symbols...</small>}
-              {!form.is_custom_symbol && symbolResults.length > 0 && (
-                <div className="symbol-results">
-                  {symbolResults.map((symbol) => (
-                    <button className="symbol-result" type="button" key={symbol.id} onClick={() => selectSymbol(symbol)}>
-                      <strong>{symbol.provider_symbol}</strong>
-                      <span>{symbol.name || symbol.symbol}</span>
-                      <small>{[symbol.exchange, symbol.currency, symbol.asset_type].filter(Boolean).join(" · ")}</small>
-                    </button>
-                  ))}
-                </div>
+            {requiresSymbol && form.is_custom_symbol && (
+              <Field label="Instrument name" htmlFor="tx-name" span={6}><input id="tx-name" className="inp" placeholder="For example: EQ Bank 1-year GIC" value={form.instrument_name} onChange={(event) => set({ instrument_name: event.target.value })} /></Field>
+            )}
+            {showCategories && (
+              <>
+                <Field label="Broad category" htmlFor="tx-broad">
+                  <select id="tx-broad" className="inp" value={form.broad_category} onChange={(event) => set({ broad_category: event.target.value, precise_category: preciseOptionsFor(event.target.value)[0] || "" })}>
+                    <option value="">None</option>
+                    {Object.keys(categoryOptions).map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </Field>
+                <Field label="Precise category" htmlFor="tx-precise">
+                  <select id="tx-precise" className="inp" value={form.precise_category} onChange={(event) => set({ precise_category: event.target.value })}>
+                    <option value="">None</option>
+                    {preciseOptionsFor(form.broad_category).map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </Field>
+              </>
+            )}
+          </Section>
+        )}
+
+        <Section n={step++} title="How much">
+          {isCurrencyExchange ? (
+            <>
+              <Field label="You give" htmlFor="tx-from-amount"><MoneyInput id="tx-from-amount" required min="0.01" value={form.source_amount} onChange={(source_amount) => set({ source_amount })} currency={form.source_currency} onCurrencyChange={(source_currency) => set({ source_currency })} /></Field>
+              <Field label="You get" htmlFor="tx-amount"><MoneyInput id="tx-amount" required min="0.000001" step="0.000001" value={form.amount} onChange={(value) => set({ amount: value })} currency={form.currency} onCurrencyChange={(currency) => set({ currency })} /></Field>
+            </>
+          ) : (
+            <>
+              {requiresSymbol && (
+                <Field label={isAdjustment ? "Units to add (negative removes)" : "Quantity"} htmlFor="tx-qty" span={isAdjustment ? 6 : 2}>
+                  <input id="tx-qty" className="inp num" type="number" inputMode="decimal" step="0.000001" min={isAdjustment ? undefined : "0"} value={form.quantity} onChange={(event) => set({ quantity: event.target.value })} />
+                </Field>
               )}
-            </div>}
-            {requiresSymbol && <div className="field"><label htmlFor="account-transaction-quantity">Quantity</label><input id="account-transaction-quantity" type="number" min="0" step="0.000001" inputMode="decimal" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>}
-            <div className="field"><label htmlFor="account-transaction-fees">Fees</label><input id="account-transaction-fees" type="number" min="0" step="0.000001" inputMode="decimal" value={form.fees} onChange={(e) => setForm({ ...form, fees: e.target.value })} /></div>
-            <div className="field"><label htmlFor="account-transaction-fee-currency">Fee Currency</label><select id="account-transaction-fee-currency" value={form.fee_currency} onChange={(e) => setForm({ ...form, fee_currency: e.target.value })}><option>CAD</option><option>USD</option></select></div>
-            {!isCurrencyExchange && <div className="field"><label htmlFor="account-transaction-instrument-name">Instrument Name</label><input id="account-transaction-instrument-name" value={form.instrument_name} onChange={(e) => setForm({ ...form, instrument_name: e.target.value })} /></div>}
-            <div className="field field-span"><label htmlFor="account-transaction-notes">Notes</label><textarea id="account-transaction-notes" value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
+              {!isAdjustment && (
+                <Field label={AMOUNT_LABELS[transactionType] || "Amount"} htmlFor="tx-amount" span={requiresSymbol ? 2 : isWithdrawal ? 6 : 3} hint={CURRENCIES.includes(form.currency) ? undefined : <span className="warn-text">{form.currency} isn&apos;t supported. Pick CAD or USD, or use a custom symbol.</span>}>
+                  <MoneyInput id="tx-amount" required min={transactionType === "investment_buy" ? "0" : "0.000001"} step="0.000001" value={form.amount} onChange={(value) => set({ amount: value })} currency={form.currency} onCurrencyChange={(currency) => set({ currency })} />
+                </Field>
+              )}
+              {!isAdjustment && !isWithdrawal && (
+                <Field label="Fees" htmlFor="tx-fees" span={requiresSymbol ? 2 : 3}>
+                  <MoneyInput id="tx-fees" min="0" step="0.000001" value={form.fees} onChange={(value) => set({ fees: value })} currency={form.fee_currency} onCurrencyChange={(fee_currency) => set({ fee_currency })} />
+                </Field>
+              )}
+              {supportsSourceCash && (
+                <Field label="Cash used (optional)" htmlFor="tx-cash" hint="Only when you paid in another currency." span={6}>
+                  <MoneyInput id="tx-cash" min="0.000001" step="0.000001" value={form.source_amount} onChange={(source_amount) => set({ source_amount })} currency={form.source_currency} onCurrencyChange={(source_currency) => set({ source_currency })} />
+                </Field>
+              )}
+            </>
+          )}
+        </Section>
+
+        {requiresFunding && (
+          <Section n={step++} title="Paid from" optional>
+            <div className="f c6">
+              {contributions.filter((contribution) => !isTransfer || contribution.platform_name.toLowerCase() === form.source_platform_name.toLowerCase()).map((contribution) => {
+                const funding = fundingCashSources.find((item) => item.platform_name === contribution.platform_name);
+                return (
+                  <div className={`fund${funding ? " on" : ""}`} key={contribution.platform_name}>
+                    <label className="fund-l">
+                      <input className="cb" type="checkbox" checked={Boolean(funding)} onChange={() => toggleFundingCashSource(contribution)} />
+                      <span className="fund-b">
+                        <b>{contribution.source_label} · {contribution.platform_name}</b>
+                        <span className="muted">{money(contribution.remaining_amount)} available</span>
+                      </span>
+                    </label>
+                    {funding && (
+                      <div className="fund-amt">
+                        <MoneyInput id={`fund-${contribution.platform_name.replace(/\s+/g, "-")}`} required min="0.01" value={funding.amount ? String(funding.amount) : ""} onChange={(value) => updateFundingAmount(contribution.platform_name, value)} currency="CAD" />
+                        <button className="btn btn-g sm" type="button" onClick={() => fillRemaining(contribution)}>Use all</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {contributions.length === 0 && <p className="muted">No cash available to fund this from.</p>}
+            </div>
+          </Section>
+        )}
+
+        <Section n={step++} title="Note" optional>
+          <div className="f c6">
+            <label className="sr-only" htmlFor="tx-notes">Note</label>
+            <textarea id="tx-notes" className="inp" rows={2} placeholder="For example: monthly auto-invest" value={form.notes} onChange={(event) => set({ notes: event.target.value })} />
           </div>
-          {error && <small className="field-error">{error}</small>}
-          <div className="form-actions">
-            <button className="btn" type="submit" disabled={isSaving}>{isSaving ? "Saving" : "Save Account Transaction"}</button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </Section>
+
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </form>
+    </Dialog>
   );
 }

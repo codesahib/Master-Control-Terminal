@@ -6,7 +6,8 @@ export type TransactionType =
   | "dividend_interest"
   | "dividend_reinvestment"
   | "quantity_adjustment"
-  | "currency_exchange";
+  | "currency_exchange"
+  | "withdrawal";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 
@@ -34,7 +35,6 @@ export interface AccountTransaction extends ActivityRecord {
   fee_currency?: string;
   source_amount?: number;
   source_currency?: string;
-  contribution_id?: number;
   funding_contributions?: FundingContribution[];
 }
 
@@ -137,7 +137,7 @@ export interface ContributionLimitSetting {
 }
 
 export interface SymbolSearchResult {
-  id: number;
+  id?: number | null;
   symbol: string;
   provider_symbol: string;
   name?: string;
@@ -166,14 +166,59 @@ export interface PortfolioPLRow extends Holding {
   children?: PortfolioPLRow[];
 }
 
-export interface ManualValuationPayload {
+export interface TimeSeriesPoint {
+  month: string;
+  currency?: string;
+  contributions: number;
+  investments: number;
+  withdrawals?: number;
+  dividends?: number;
+}
+
+export interface CashRow {
   account_name: string;
-  platform_name?: string;
-  instrument_id?: number;
-  symbol?: string;
-  instrument_name?: string;
-  broad_category?: string;
-  precise_category?: string;
+  platform_name?: string | null;
+  currency: string;
+  amount: number;
+}
+
+export interface PortfolioHealth {
+  missing_price: number;
+  missing_quantity: number;
+  stale: number;
+  fx_missing?: number;
+  negative_cash: CashRow[];
+  idle_cash: CashRow[];
+  prices_updated_at?: string | null;
+}
+
+export interface HistoryPoint {
+  date: string;
+  currency?: string;
+  book_value: number;
   market_value: number;
-  snapshot_date: string;
+}
+
+export interface PortfolioTotals {
+  book_value: number;
+  market_value: number;
+  unrealized_pl: number;
+  unrealized_pl_pct?: number | null;
+  investable_cash: number;
+  currency?: string;
+  fx_missing?: boolean;
+}
+
+export interface PortfolioOverview {
+  totals: PortfolioTotals;
+  summary: PortfolioSummary;
+  distribution: { sector: DistributionPoint[]; account: DistributionPoint[]; platform: DistributionPoint[] };
+  health: PortfolioHealth;
+}
+
+export interface PriceRefreshResult {
+  instrument_id: number;
+  symbol: string;
+  status: "ok" | "error" | string;
+  error?: string;
 }

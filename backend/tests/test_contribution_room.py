@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
 from app.models.models import Account, ContributionLimit, Transaction, TransactionType
-from app.services.finance import get_all_contribution_room, get_contribution_room, get_contribution_used, list_contribution_limits, list_contributions
+from app.services.finance import get_all_contribution_room, get_contribution_room, list_contribution_limits, list_contributions
 
 
 def test_contribution_room_calculation():
@@ -41,7 +41,8 @@ def test_contribution_room_calculation():
         assert all_room["remaining"] == 12500
 
         limits = [row for row in list_contribution_limits(db) if row["account"] == "TFSA"]
-        assert [row["tax_year"] for row in limits] == ["2021", "2022", "2023", "2024", "2025", "2026"]
+        # Years start at the first year with data (2025 here) and run through the current year.
+        assert [row["tax_year"] for row in limits][:2] == ["2025", "2026"]
         limit_2026 = next(row for row in limits if row["tax_year"] == "2026")
         assert limit_2026["unused_room"] == 5500
         assert limit_2026["total_room"] == 12500
@@ -56,6 +57,7 @@ def test_rrsp_contributions_use_the_cra_contribution_period():
         account = Account(name="RRSP")
         db.add(account)
         db.flush()
+        db.add(ContributionLimit(account_id=account.id, tax_year="2025", new_room=20000))
         db.add_all(
             [
                 Transaction(
@@ -86,8 +88,8 @@ def test_rrsp_contributions_use_the_cra_contribution_period():
         )
         db.commit()
 
-        assert get_contribution_used(db, account.id, 2025) == 6000
-        assert get_contribution_used(db, account.id, 2026) == 4000
+        assert get_contribution_room(db, 2025)[0]["used"] == 6000
+        assert get_contribution_room(db, 2026)[0]["used"] == 4000
         assert [row[0].transaction_date for row in list_contributions(db, account="RRSP", year=2025)] == [date(2026, 3, 2), date(2026, 3, 1), date(2026, 2, 28)]
         assert [row[0].transaction_date for row in list_contributions(db, account="RRSP", year=2026)] == [date(2026, 3, 3)]
 
@@ -101,6 +103,7 @@ def test_rrsp_contribution_period_handles_leap_years():
         account = Account(name="RRSP")
         db.add(account)
         db.flush()
+        db.add(ContributionLimit(account_id=account.id, tax_year="2023", new_room=5000))
         db.add_all(
             [
                 Transaction(
@@ -119,5 +122,5 @@ def test_rrsp_contribution_period_handles_leap_years():
         )
         db.commit()
 
-        assert get_contribution_used(db, account.id, 2023) == 1000
-        assert get_contribution_used(db, account.id, 2024) == 2000
+        assert get_contribution_room(db, 2023)[0]["used"] == 1000
+        assert get_contribution_room(db, 2024)[0]["used"] == 2000

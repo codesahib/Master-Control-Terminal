@@ -1,31 +1,15 @@
 import pytest
 
 from app.models.models import TransactionType
-from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
-
-
-def test_investment_requires_symbol():
-    with pytest.raises(ValueError):
-        TransactionCreate(
-            transaction_type=TransactionType.investment_buy,
-            transaction_date="2026-01-01",
-            amount=100,
-        )
-
-
-def test_dividend_reinvestment_requires_symbol_and_quantity():
-    with pytest.raises(ValueError):
-        TransactionCreate(
-            transaction_type=TransactionType.dividend_reinvestment,
-            transaction_date="2026-01-01",
-            amount=100,
-        )
+from app.schemas.schemas import AccountTransactionCreate, ContributionCreate
 
 
 def test_quantity_adjustment_requires_non_zero_quantity_and_zero_cash():
-    txn = TransactionCreate(
+    txn = AccountTransactionCreate(
         transaction_type=TransactionType.quantity_adjustment,
         transaction_date="2026-01-01",
+        account_name="TFSA",
+        platform_name="Questrade",
         symbol="NVDA",
         amount=0,
         quantity=-1,
@@ -33,9 +17,11 @@ def test_quantity_adjustment_requires_non_zero_quantity_and_zero_cash():
     assert txn.quantity == -1
 
     with pytest.raises(ValueError):
-        TransactionCreate(
+        AccountTransactionCreate(
             transaction_type=TransactionType.quantity_adjustment,
             transaction_date="2026-01-01",
+            account_name="TFSA",
+            platform_name="Questrade",
             symbol="NVDA",
             amount=1,
             quantity=1,
@@ -68,25 +54,6 @@ def test_currency_exchange_requires_two_positive_different_currency_amounts():
             source_amount=1084.98,
             source_currency="USD",
         )
-
-
-def test_transfer_requires_notes():
-    with pytest.raises(ValueError):
-        TransactionCreate(
-            transaction_type=TransactionType.transfer,
-            transaction_date="2026-01-01",
-            amount=100,
-        )
-
-
-def test_contribution_valid():
-    txn = TransactionCreate(
-        transaction_type=TransactionType.contribution,
-        transaction_date="2026-01-01",
-        amount=250,
-        account_name="TFSA",
-    )
-    assert txn.amount == 250
 
 
 def test_domain_contribution_valid():
@@ -125,7 +92,7 @@ def test_account_investment_allows_optional_funding():
         account_name="TFSA",
         platform_name="Wealthsimple",
         amount=100,
-        contribution_id=1,
+        funding_contributions=[{"contribution_id": 1, "amount": 100}],
     )
     assert txn.symbol is None
     assert txn.precise_category is None
@@ -141,7 +108,7 @@ def test_dividend_reinvestment_requires_holding_details_but_not_a_contribution()
         amount=100,
         quantity=1,
     )
-    assert txn.contribution_id is None
+    assert txn.funding_contributions == []
 
     with pytest.raises(ValueError):
         AccountTransactionCreate(
