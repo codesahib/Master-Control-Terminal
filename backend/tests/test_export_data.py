@@ -13,10 +13,6 @@ from app.models.models import (
     ContributionLimit,
     HoldingSnapshot,
     PortfolioSnapshot,
-    Import,
-    ImportRow,
-    ImportStatus,
-    ImportType,
     Instrument,
     MarketPrice,
     Platform,
@@ -65,7 +61,6 @@ def test_export_includes_persisted_records():
             instrument_id=instrument.id,
             amount=100,
             quantity=1,
-            contribution_id=transaction.id,
         )
         reinvestment = Transaction(
             transaction_type=TransactionType.dividend_reinvestment,
@@ -84,17 +79,14 @@ def test_export_includes_persisted_records():
             category_id=category.id,
             market_value=1200,
         )
-        imp = Import(import_type=ImportType.contributions, source_filename="backup.xlsx", status=ImportStatus.parsed)
         price = MarketPrice(instrument_id=instrument.id, price=42, currency="CAD", priced_at=date(2026, 6, 4))
-        db.add_all([limit, transaction, investment, reinvestment, snapshot, imp, price])
+        db.add_all([limit, transaction, investment, reinvestment, snapshot, price])
         db.flush()
-        investment.contribution_id = transaction.id
 
-        import_row = ImportRow(import_id=imp.id, row_number=1, payload_json=json.dumps({"amount": 500}), error=None)
         funding = TransactionFunding(transaction_id=investment.id, contribution_id=transaction.id, amount=100)
         audit = AuditLog(operation="create", table_name="transactions", row_id="1")
         portfolio_snapshot = PortfolioSnapshot(snapshot_date=date(2026, 1, 2), account_id=account.id, book_value=100, market_value=110)
-        db.add_all([import_row, funding, audit, portfolio_snapshot])
+        db.add_all([funding, audit, portfolio_snapshot])
         db.commit()
 
         exported = export_all_data(db)
@@ -110,12 +102,9 @@ def test_export_includes_persisted_records():
         assert exported["instruments"][0]["symbol"] == "XEQT"
         assert exported["contribution_limits"][0]["tax_year"] == "2026"
         assert exported["transactions"][0]["notes"] == "manual backup test"
-        assert next(row for row in exported["transactions"] if row["id"] == investment.id)["contribution_id"] == transaction.id
         assert {row["transaction_type"] for row in exported["transactions"]} >= {TransactionType.dividend_reinvestment}
         assert exported["transaction_fundings"][0]["amount"] == 100
         assert exported["holdings_snapshots"][0]["market_value"] == 1200
-        assert exported["imports"][0]["source_filename"] == "backup.xlsx"
-        assert exported["import_rows"][0]["payload_json"] == "{\"amount\": 500}"
 
 
 def test_restore_replaces_existing_data():
@@ -130,8 +119,7 @@ def test_restore_replaces_existing_data():
         instrument = Instrument(id=1, symbol="XEQT", name="iShares Core Equity ETF", category_id=category.id)
         alias = PlatformAlias(id=1, alias="ws", platform_id=platform.id)
         limit = ContributionLimit(id=1, account_id=account.id, tax_year="2026", new_room=7000)
-        imp = Import(id=1, import_type=ImportType.contributions, source_filename="backup.xlsx", status=ImportStatus.parsed)
-        source_db.add_all([account, platform, category, instrument, alias, limit, imp])
+        source_db.add_all([account, platform, category, instrument, alias, limit])
         source_db.flush()
         contribution = Transaction(
                 id=1,
@@ -152,7 +140,6 @@ def test_restore_replaces_existing_data():
             instrument_id=instrument.id,
             amount=100,
             quantity=1,
-            contribution_id=contribution.id,
         )
         reinvestment = Transaction(
             id=3,
@@ -176,8 +163,7 @@ def test_restore_replaces_existing_data():
             market_value=1200,
         )
         funding = TransactionFunding(id=1, transaction_id=investment.id, contribution_id=contribution.id, amount=100)
-        import_row = ImportRow(id=1, import_id=imp.id, row_number=1, payload_json='{"amount": 500}', error=None)
-        source_db.add_all([snapshot, funding, import_row])
+        source_db.add_all([snapshot, funding])
         source_db.commit()
         source_data = export_all_data(source_db)
         payload = json.loads(json.dumps(jsonable_encoder({"data": source_data})))

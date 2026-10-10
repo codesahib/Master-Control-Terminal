@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini .
-COPY import_spreadsheet_to_db.py .
 
 EXPOSE 8000
 CMD ["sh", "-c", "if [ \"${RUN_MIGRATIONS_ON_STARTUP:-0}\" = \"1\" ]; then alembic upgrade head; fi; uvicorn app.main:app --host 0.0.0.0 --port 8000"]

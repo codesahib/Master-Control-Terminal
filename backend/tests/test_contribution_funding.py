@@ -34,7 +34,7 @@ def test_contribution_can_fund_partial_and_full_investment_buys():
                     account_name="TFSA",
                     platform_name="Wealthsimple",
                     amount=amount,
-                    contribution_id=contribution.id,
+                    funding_contributions=[{"contribution_id": contribution.id, "amount": amount}],
                 ),
             )
 
@@ -54,7 +54,7 @@ def test_contribution_can_fund_partial_and_full_investment_buys():
                 account_name="TFSA",
                 platform_name="Wealthsimple",
                 amount=105.58,
-                contribution_id=contribution.id,
+                funding_contributions=[{"contribution_id": contribution.id, "amount": 105.58}],
             ),
         )
 
@@ -68,7 +68,7 @@ def test_contribution_can_fund_partial_and_full_investment_buys():
                     account_name="TFSA",
                     platform_name="Wealthsimple",
                     amount=1,
-                    contribution_id=contribution.id,
+                    funding_contributions=[{"contribution_id": contribution.id, "amount": 1}],
                 ),
             )
 
