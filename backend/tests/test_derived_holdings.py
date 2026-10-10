@@ -302,6 +302,8 @@ def test_custom_symbol_stays_manual():
     Base.metadata.create_all(engine)
 
     with Session() as db:
+        db.add(Account(name="RRSP"))
+        db.commit()
         create_account_transaction(
             db,
             AccountTransactionCreate(
@@ -380,7 +382,7 @@ def test_holdings_and_pl_group_symbol_with_platform_children():
         assert pl["unrealized_pl_pct"] == 25
 
 
-def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings(monkeypatch):
+def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings():
     engine = create_engine("sqlite:///:memory:", future=True)
     Session = sessionmaker(bind=engine, future=True)
     Base.metadata.create_all(engine)
@@ -411,8 +413,11 @@ def test_portfolio_pl_adds_cad_reporting_values_for_usd_holdings(monkeypatch):
                 ),
             ]
         )
+        fx = Instrument(symbol="USDCAD", provider_symbol="CAD=X", asset_type="fx", currency="CAD")
+        db.add(fx)
+        db.flush()
+        db.add(MarketPrice(instrument_id=fx.id, price=1.35, currency="CAD", priced_at=datetime.utcnow()))
         db.commit()
-        monkeypatch.setattr("app.services.portfolio.fetch_usd_cad_rate", lambda: 1.35)
 
         row = portfolio_pl(db, status="ok")[0]
 
