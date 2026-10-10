@@ -33,8 +33,9 @@ def portfolio_summary(db: Session, year=None):
     return _summary(_portfolio_pl_rows(db, year=year), _account_names(db))
 
 
-def portfolio_overview(db: Session, year=None, category_level: str = "precise"):
-    rows = _portfolio_pl_rows(db, year=year)
+def portfolio_overview(db: Session, year=None, category_level: str = "precise", currency: str = "CAD"):
+    usd_cad_rate = latest_fx_rate(db)
+    rows = _portfolio_pl_rows(db, year=year, currency=currency)
     summary = _summary(rows, _account_names(db))
     converted = [row for row in rows if row["book_value_reporting"] is not None]
     priced = [row for row in converted if row["record_type"] != "cash" and row["price_status"] in PRICED_STATUSES]
@@ -42,6 +43,9 @@ def portfolio_overview(db: Session, year=None, category_level: str = "precise"):
     unrealized_pl = sum(row["unrealized_pl_reporting"] or 0 for row in priced)
     return {
         "totals": {
+            "currency": _effective_currency(currency, usd_cad_rate),
+            # No stored USD/CAD rate: USD was requested (values fall back to CAD) or USD rows could not be converted.
+            "fx_missing": usd_cad_rate is None and (currency != "CAD" or any(row["fx_missing"] for row in rows)),
             "book_value": round(sum(row["book_value_reporting"] for row in converted), 2),
             "market_value": round(sum(_reporting_value(row) for row in converted), 2),
             "unrealized_pl": round(unrealized_pl, 2),
@@ -60,7 +64,9 @@ def portfolio_health(db: Session, year=None):
     return _health(db, _portfolio_pl_rows(db, year=year))
 
 
-def portfolio_history(db: Session, days: int = 365):
+def portfolio_history(db: Session, days: int = 365, currency: str = "CAD"):
+    usd_cad_rate = latest_fx_rate(db)
+    reporting = _effective_currency(currency, usd_cad_rate)
     since = utcnow().date() - timedelta(days=days)
     rows = db.execute(
         select(PortfolioSnapshot.snapshot_date, func.sum(PortfolioSnapshot.book_value), func.sum(PortfolioSnapshot.market_value))
@@ -68,7 +74,15 @@ def portfolio_history(db: Session, days: int = 365):
         .group_by(PortfolioSnapshot.snapshot_date)
         .order_by(PortfolioSnapshot.snapshot_date)
     ).all()
-    return [{"date": day, "book_value": float(book or 0), "market_value": float(market or 0)} for day, book, market in rows]
+    return [
+        {
+            "date": day,
+            "book_value": _convert(book or 0, "CAD", reporting, usd_cad_rate),
+            "market_value": _convert(market or 0, "CAD", reporting, usd_cad_rate),
+            "currency": reporting,
+        }
+        for day, book, market in rows
+    ]
 
 
 def record_portfolio_snapshots(db: Session) -> None:
@@ -146,11 +160,11 @@ def _label(group_by: str, category_level: str = "precise"):
     return lambda row: row.get(key)
 
 
-def _allocation(rows: list[dict], label_of, currency: str = "CAD", usd_cad_rate: float | None = None):
-    """Allocation by label: CAD market value (book when unpriced), optionally shown in USD."""
+def _allocation(rows: list[dict], label_of):
+    """Allocation by label: reporting-currency market value (book when unpriced)."""
     totals = {}
     for row in rows:
-        value = _from_cad(_reporting_value(row), currency, usd_cad_rate)
+        value = _reporting_value(row)
         if value is None:
             continue  # no FX rate: counted in health.fx_missing
         label = label_of(row) or "Uncategorized"
@@ -440,10 +454,11 @@ def portfolio_pl(db: Session, account=None, year=None, platform=None, status=Non
     return _group_pl_rows(rows)
 
 
-def _portfolio_pl_rows(db: Session, account=None, year=None):
+def _portfolio_pl_rows(db: Session, account=None, year=None, currency: str = "CAD"):
     prices = latest_prices(db)
     manual_values = _latest_manual_values(db)
     usd_cad_rate = latest_fx_rate(db)
+    reporting = _effective_currency(currency, usd_cad_rate)
     stale_before = utcnow() - timedelta(hours=24)
     rows = []
     for holding in list_holdings(db, account=account, year=year):
@@ -495,35 +510,40 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
             row["unrealized_pl"] = unrealized_pl
             row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
             row["price_status"] = "stale" if as_utc(price.priced_at) < stale_before else "ok"
-        _add_reporting_values(row, usd_cad_rate)
+        _add_reporting_values(row, reporting, usd_cad_rate)
         rows.append(row)
     return rows
 
 
-def _to_cad(value, currency: str | None, usd_cad_rate: float | None):
-    if value is None:
+def _effective_currency(currency: str, usd_cad_rate: float | None) -> str:
+    """Requested reporting currency, or CAD when USD is requested but no USD/CAD rate is stored yet."""
+    return currency if currency == "CAD" or usd_cad_rate else "CAD"
+
+
+def _rate(from_currency: str | None, to_currency: str, usd_cad_rate: float | None) -> float | None:
+    """Multiplier between CAD and USD at the stored rate (CAD per USD). None when impossible."""
+    if from_currency == to_currency:
+        return 1.0
+    if usd_cad_rate and (from_currency, to_currency) == ("USD", "CAD"):
+        return usd_cad_rate
+    if usd_cad_rate and (from_currency, to_currency) == ("CAD", "USD"):
+        return 1 / usd_cad_rate
+    return None
+
+
+def _convert(value, from_currency: str | None, to_currency: str, usd_cad_rate: float | None):
+    rate = _rate(from_currency, to_currency, usd_cad_rate)
+    if value is None or rate is None:
         return None
-    if currency == "CAD":
-        return round(float(value), 2)
-    if currency == "USD" and usd_cad_rate:
-        return round(float(value) * usd_cad_rate, 2)
-    return None
+    return round(float(value) * rate, 2)
 
 
-def _from_cad(value, currency: str, usd_cad_rate: float | None):
-    if value is None or currency == "CAD":
-        return value
-    if currency == "USD" and usd_cad_rate:
-        return value / usd_cad_rate
-    return None
-
-
-def _add_reporting_values(row: dict, usd_cad_rate: float | None):
-    row["reporting_currency"] = "CAD"
-    row["fx_rate_to_reporting"] = 1.0 if row["currency"] == "CAD" else (usd_cad_rate if row["currency"] == "USD" else None)
-    row["book_value_reporting"] = _to_cad(row.get("book_value"), row.get("currency"), usd_cad_rate)
-    row["market_value_reporting"] = _to_cad(row.get("market_value"), row.get("currency"), usd_cad_rate)
-    row["unrealized_pl_reporting"] = _to_cad(row.get("unrealized_pl"), row.get("currency"), usd_cad_rate)
+def _add_reporting_values(row: dict, reporting: str, usd_cad_rate: float | None):
+    row["reporting_currency"] = reporting
+    row["fx_rate_to_reporting"] = _rate(row["currency"], reporting, usd_cad_rate)
+    row["book_value_reporting"] = _convert(row.get("book_value"), row.get("currency"), reporting, usd_cad_rate)
+    row["market_value_reporting"] = _convert(row.get("market_value"), row.get("currency"), reporting, usd_cad_rate)
+    row["unrealized_pl_reporting"] = _convert(row.get("unrealized_pl"), row.get("currency"), reporting, usd_cad_rate)
     # No rate stored yet (refresh prices) or unsupported currency: totals skip the row, health reports it.
     row["fx_missing"] = row["book_value_reporting"] is None
 
@@ -573,7 +593,7 @@ def _group_pl_rows(rows: list[dict]):
         )
         group["market_value"] = round(sum(market_values), 2) if market_values else None
         group["unrealized_pl"] = round(sum(unrealized_values), 2) if unrealized_values else None
-        group["reporting_currency"] = "CAD"
+        group["reporting_currency"] = children[0]["reporting_currency"]
         group["fx_rate_to_reporting"] = children[0].get("fx_rate_to_reporting") if len({row.get("fx_rate_to_reporting") for row in children}) == 1 else None
         group["book_value_reporting"] = round(
             sum(float(row["book_value_reporting"]) for row in children if row.get("book_value_reporting") is not None),
@@ -593,12 +613,13 @@ def _group_pl_rows(rows: list[dict]):
 
 
 def distribution(db: Session, group_by: str, year: int | None = None, category_level: str = "precise", currency: str = "CAD"):
-    return _allocation(_portfolio_pl_rows(db, year=year), _label(group_by, category_level), currency, latest_fx_rate(db))
+    return _allocation(_portfolio_pl_rows(db, year=year, currency=currency), _label(group_by, category_level))
 
 
 def timeseries(db: Session, year: int | None = None, currency: str = "CAD"):
     # ponytail: converts every month at the latest stored USD/CAD rate; store historical FX if exact history matters.
     usd_cad_rate = latest_fx_rate(db)
+    reporting = _effective_currency(currency, usd_cad_rate)
     q = select(Transaction.transaction_date, Transaction.transaction_type, Transaction.amount, Transaction.currency)
     if year:
         q = q.where(Transaction.transaction_date >= date(year, 1, 1), Transaction.transaction_date < date(year + 1, 1, 1))
@@ -606,12 +627,14 @@ def timeseries(db: Session, year: int | None = None, currency: str = "CAD"):
     for transaction_date, transaction_type, amount, transaction_currency in db.execute(q):
         if transaction_type not in TIMESERIES_FIELDS:
             continue
-        value = _from_cad(_to_cad(amount, transaction_currency or "CAD", usd_cad_rate), currency, usd_cad_rate)
+        value = _convert(amount, transaction_currency or "CAD", reporting, usd_cad_rate)
         if value is None:
             continue
         field, sign = TIMESERIES_FIELDS[transaction_type]
         month = f"{transaction_date:%Y-%m}"
-        totals = months.setdefault(month, {"month": month, "contributions": 0.0, "investments": 0.0, "withdrawals": 0.0, "dividends": 0.0})
+        totals = months.setdefault(
+            month, {"month": month, "currency": reporting, "contributions": 0.0, "investments": 0.0, "withdrawals": 0.0, "dividends": 0.0}
+        )
         totals[field] += sign * value
     return [
         {key: round(value, 2) if isinstance(value, float) else value for key, value in months[month].items()}
