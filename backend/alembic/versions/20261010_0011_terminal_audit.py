@@ -60,6 +60,12 @@ POSTGRES_CHECKS = [
 ]
 
 
+def _require_zero(sql: str, message: str) -> None:
+    count = op.get_bind().execute(sa.text(sql)).scalar()
+    if count:
+        raise RuntimeError(f"{count} {message}; resolve them before running 20261010_0011")
+
+
 def _execute(sql: str, label: str | None = None) -> None:
     result = op.get_bind().execute(sa.text(sql))
     if label:
@@ -67,18 +73,28 @@ def _execute(sql: str, label: str | None = None) -> None:
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    missing_accounts = bind.execute(sa.text("SELECT count(*) FROM transactions WHERE account_id IS NULL")).scalar()
-    if missing_accounts:
-        raise RuntimeError(
-            f"{missing_accounts} transactions have no account_id; assign an account to each before running 20261010_0011"
-        )
+    # Refuse to lose data: every row this migration drops or rewrites must be safe to drop.
+    _require_zero("SELECT count(*) FROM transactions WHERE account_id IS NULL", "transactions have no account_id")
+    _require_zero(
+        "SELECT count(*) FROM transactions WHERE reversal_of_id IS NOT NULL",
+        "transactions use reversal_of_id (column is dropped)",
+    )
+    _require_zero("SELECT count(*) FROM imports", "imports rows exist (table is dropped)")
+    _require_zero("SELECT count(*) FROM import_rows", "import_rows rows exist (table is dropped)")
+    _require_zero(
+        """
+        SELECT count(*) FROM (
+            SELECT 1 FROM contribution_limits GROUP BY account_id, tax_year HAVING count(DISTINCT new_room) > 1
+        ) conflicting
+        """,
+        "(account, tax_year) pairs have contribution_limits rows with different new_room values",
+    )
 
     # 1. Dedupe, then unique constraints.
     _execute(
         """
         DELETE FROM contribution_limits a USING contribution_limits b
-        WHERE a.account_id = b.account_id AND a.tax_year = b.tax_year AND a.id < b.id
+        WHERE a.account_id = b.account_id AND a.tax_year = b.tax_year AND a.new_room = b.new_room AND a.id < b.id
         """,
         "contribution_limits duplicates removed",
     )
@@ -152,13 +168,15 @@ def upgrade() -> None:
     op.create_index(op.f("ix_portfolio_snapshots_snapshot_date"), "portfolio_snapshots", ["snapshot_date"])
     op.create_index(op.f("ix_portfolio_snapshots_account_id"), "portfolio_snapshots", ["account_id"])
 
-    # 6. Legacy single-funding column → transaction_fundings, then drop legacy columns and import tables.
+    # 6. Legacy single-funding column → transaction_fundings (the old code counted only investment buys),
+    # then drop legacy columns and import tables.
     _execute(
         """
         INSERT INTO transaction_fundings (transaction_id, contribution_id, amount)
         SELECT t.id, t.contribution_id, t.amount + COALESCE(t.fees, 0)
         FROM transactions t
         WHERE t.contribution_id IS NOT NULL
+          AND t.transaction_type = 'investment_buy'
           AND t.amount + COALESCE(t.fees, 0) > 0
           AND NOT EXISTS (SELECT 1 FROM transaction_fundings f WHERE f.transaction_id = t.id)
         """,
