@@ -372,7 +372,7 @@ def test_routes_status_codes_page_size_and_backup_version():
 
     app.dependency_overrides[get_db] = override_db
     try:
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://localhost")
         assert client.post("/transactions", json={}, headers=HEADERS).status_code == 405
 
         created = [
