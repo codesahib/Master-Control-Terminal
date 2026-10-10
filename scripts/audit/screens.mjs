@@ -24,12 +24,20 @@ async function settle(page) {
   await page.waitForTimeout(400); // chart animations
 }
 
+// Matches visible text or aria-label (icon-only buttons such as the phone "+" have no text).
 async function clickText(page, pattern) {
-  const target = page.locator("button, a").filter({ hasText: pattern }).first();
-  if (!(await target.count()) || !(await target.isVisible())) return false;
-  await target.click();
-  await settle(page);
-  return true;
+  const all = page.locator("button, a");
+  for (let i = 0, n = await all.count(); i < n; i++) {
+    const el = all.nth(i);
+    if (!(await el.isVisible())) continue;
+    const text = (await el.innerText()).trim();
+    const label = (await el.getAttribute("aria-label")) || "";
+    if (!pattern.test(text) && !pattern.test(label)) continue;
+    await el.click();
+    await settle(page);
+    return true;
+  }
+  return false;
 }
 
 // Pages: hash routes when the app has them (new UI), else the legacy view flow.
@@ -71,9 +79,12 @@ function measure() {
 }
 
 async function checkModal(page, file) {
-  const opened = (await clickText(page, /New Account Transaction|New transaction|^\s*New\s*$|^\+$/)) || (await clickText(page, /New Contribution/));
+  const opened = (await clickText(page, /New Account Transaction|New transaction|^\s*New\s*$|^New entry$|^\+$/)) || (await clickText(page, /New Contribution/));
   if (!opened) return { opened: false };
-  if (!(await page.locator("dialog[open], [role=dialog]").count())) await clickText(page, /Transaction/); // "+ New" menus
+  const SUBMIT = "button[type=submit], button.btn-primary, button.btn-p";
+  const open = page.locator("dialog[open], [role=dialog]").first();
+  if (!(await open.count())) await clickText(page, /Transaction/); // "+ New" menus
+  else if (!(await open.locator(SUBMIT).count())) await clickText(page, /^Transaction/); // phone "Add" chooser sheet
   const dialog = page.locator("dialog[open], [role=dialog]").first();
   if (!(await dialog.count())) return { opened: false };
   const info = await dialog.evaluate((el) => {
