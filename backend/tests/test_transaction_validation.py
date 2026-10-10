@@ -125,7 +125,7 @@ def test_account_investment_allows_optional_funding():
         account_name="TFSA",
         platform_name="Wealthsimple",
         amount=100,
-        contribution_id=1,
+        funding_contributions=[{"contribution_id": 1, "amount": 100}],
     )
     assert txn.symbol is None
     assert txn.precise_category is None
@@ -141,7 +141,7 @@ def test_dividend_reinvestment_requires_holding_details_but_not_a_contribution()
         amount=100,
         quantity=1,
     )
-    assert txn.contribution_id is None
+    assert txn.funding_contributions == []
 
     with pytest.raises(ValueError):
         AccountTransactionCreate(

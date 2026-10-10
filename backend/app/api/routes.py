@@ -8,10 +8,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from openpyxl import load_workbook
 
 from app.db.session import get_db
-from app.models.models import ImportType, Platform, Transaction, TransactionType
+from app.models.models import Platform, Transaction, TransactionType
 from app.schemas.schemas import (
     AccountTransactionCreate,
     AccountTransactionRead,
@@ -24,8 +23,6 @@ from app.schemas.schemas import (
     ContributionRoomRead,
     DistributionPoint,
     HoldingRead,
-    ImportPreviewResponse,
-    ImportPreviewRow,
     MarketPriceRefreshResult,
     ManualValuationUpsert,
     PaginatedTransactionRead,
@@ -37,7 +34,6 @@ from app.schemas.schemas import (
 from app.services.finance import (
     create_account_transaction,
     create_contribution,
-    create_import_preview,
     create_transaction,
     export_all_data,
     get_all_contribution_room,
@@ -350,65 +346,6 @@ async def import_backup(file: UploadFile = File(...), db: Session = Depends(get_
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {"status": "ok", "message": "Backup restored successfully"}
-
-
-@router.post("/imports/contributions", response_model=ImportPreviewResponse)
-async def import_contributions(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    wb = load_workbook(file.file, data_only=True)
-    rows = []
-    for year in [name for name in wb.sheetnames if name.isdigit()]:
-        ws = wb[year]
-        for r in range(12, 24):
-            rrsp_label = ws.cell(r, 9).value
-            rrsp_amount = ws.cell(r, 10).value
-            tfsa_label = ws.cell(r, 11).value
-            tfsa_amount = ws.cell(r, 12).value
-            if rrsp_label and rrsp_amount:
-                rows.append({"tax_year": int(year), "account": "RRSP", "label": rrsp_label, "amount": float(rrsp_amount)})
-            if tfsa_label and tfsa_amount:
-                rows.append({"tax_year": int(year), "account": "TFSA", "label": tfsa_label, "amount": float(tfsa_amount)})
-
-    imp = create_import_preview(db, ImportType.contributions, file.filename, rows)
-    return ImportPreviewResponse(
-        import_id=imp.id,
-        rows=[ImportPreviewRow(row_number=i + 1, payload=row) for i, row in enumerate(rows[:250])],
-        row_count=len(rows),
-    )
-
-
-@router.post("/imports/holdings", response_model=ImportPreviewResponse)
-async def import_holdings(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    wb = load_workbook(file.file, data_only=True)
-    if "Distrubution" not in wb.sheetnames and "Distribution" not in wb.sheetnames:
-        raise HTTPException(status_code=400, detail="Distribution sheet not found")
-
-    sheet_name = "Distrubution" if "Distrubution" in wb.sheetnames else "Distribution"
-    ws = wb[sheet_name]
-    rows = []
-
-    for r in range(17, 42):
-        for start_col, account in [(1, "FHSA"), (9, "RRSP"), (16, "TFSA")]:
-            fund = ws.cell(r, start_col).value
-            broad = ws.cell(r, start_col + 1).value
-            precise = ws.cell(r, start_col + 2).value
-            amount = ws.cell(r, start_col + 3).value
-            if fund and amount:
-                rows.append(
-                    {
-                        "account": account,
-                        "instrument": str(fund),
-                        "broad_category": str(broad) if broad else "Unknown",
-                        "precise_category": str(precise) if precise else "Unknown",
-                        "market_value": float(amount),
-                    }
-                )
-
-    imp = create_import_preview(db, ImportType.holdings, file.filename, rows)
-    return ImportPreviewResponse(
-        import_id=imp.id,
-        rows=[ImportPreviewRow(row_number=i + 1, payload=row) for i, row in enumerate(rows[:250])],
-        row_count=len(rows),
-    )
 
 
 from app.api.portfolio_routes import router as portfolio_router  # noqa: E402
