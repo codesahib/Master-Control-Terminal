@@ -168,6 +168,7 @@ export interface PortfolioPLRow extends Holding {
 
 export interface TimeSeriesPoint {
   month: string;
+  currency?: string;
   contributions: number;
   investments: number;
   withdrawals?: number;
@@ -193,6 +194,7 @@ export interface PortfolioHealth {
 
 export interface HistoryPoint {
   date: string;
+  currency?: string;
   book_value: number;
   market_value: number;
 }
@@ -203,6 +205,7 @@ export interface PortfolioTotals {
   unrealized_pl: number;
   unrealized_pl_pct?: number | null;
   investable_cash: number;
+  currency?: string;
   fx_missing?: boolean;
 }
 

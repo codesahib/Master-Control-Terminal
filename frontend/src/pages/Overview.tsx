@@ -61,6 +61,9 @@ export function Overview() {
   const health = apiHealth || overview.data?.health;
   const distribution = overview.data?.distribution?.[tab] || [];
   const room = roomQ.data || [];
+  // The API falls back to CAD when it has no exchange rate, so label amounts with what it actually returned.
+  const valueCurrency = totals?.currency || currency;
+  const historyCurrency = historyQ.data?.[0]?.currency || currency;
 
   const history = useMemo(() => {
     const from = cutoff(range);
@@ -69,6 +72,7 @@ export function Overview() {
   const historyChange = history.length > 1 ? history[history.length - 1].market - history[0].market : null;
 
   const flow = (flowQ.data || []).slice(-12);
+  const flowCurrency = flow[0]?.currency || currency;
   const flowTotals = flow.reduce((sum, point) => ({ contributions: sum.contributions + point.contributions, investments: sum.investments + point.investments }), { contributions: 0, investments: 0 });
 
   const allocation = useMemo(() => {
@@ -111,18 +115,18 @@ export function Overview() {
       <section className="card hero s8" aria-labelledby="pv-label">
         <div className="hero-h">
           <div>
-            <div className="sub" id="pv-label">Portfolio value · {currency}</div>
-            <div className="big num money">{totals ? money(totals.market_value, currency) : "–"}</div>
+            <div className="sub" id="pv-label">Portfolio value · {valueCurrency}</div>
+            <div className="big num money">{totals ? money(totals.market_value, valueCurrency) : "–"}</div>
             <div className="row">
               {historyChange !== null ? (
-                <span className={`chip ${historyChange < 0 ? "chip-neg" : "chip-pos"}`}>{historyChange < 0 ? "▼" : "▲"} <span className="money">{signedMoney(historyChange, currency)}</span></span>
+                <span className={`chip ${historyChange < 0 ? "chip-neg" : "chip-pos"}`}>{historyChange < 0 ? "▼" : "▲"} <span className="money">{signedMoney(historyChange, historyCurrency)}</span></span>
               ) : (
-                totals && <span className={`chip ${totals.unrealized_pl < 0 ? "chip-neg" : "chip-pos"}`}>{totals.unrealized_pl < 0 ? "▼" : "▲"} <span className="money">{signedMoney(totals.unrealized_pl, currency)}</span> · {pct(totals.unrealized_pl_pct)}</span>
+                totals && <span className={`chip ${totals.unrealized_pl < 0 ? "chip-neg" : "chip-pos"}`}>{totals.unrealized_pl < 0 ? "▼" : "▲"} <span className="money">{signedMoney(totals.unrealized_pl, valueCurrency)}</span> · {pct(totals.unrealized_pl_pct)}</span>
               )}
               <span className="sub">{historyChange !== null ? `over ${range === "All" ? "all time" : range}` : "unrealized, all time"}</span>
             </div>
             {totals?.fx_missing && (
-              <p className="hint fx-hint">Some USD amounts have no exchange rate yet. <button className="link" type="button" onClick={refreshPrices}>Refresh prices</button></p>
+              <p className="hint fx-hint">{valueCurrency !== currency ? `No USD/CAD rate yet, so amounts show in ${valueCurrency}.` : "Some amounts have no exchange rate yet."} <button className="link" type="button" onClick={refreshPrices}>Refresh prices</button></p>
             )}
           </div>
           {history.length > 1 && (
@@ -132,7 +136,7 @@ export function Overview() {
           )}
         </div>
         {history.length > 1 ? (
-          <ValueChart points={history} currency={currency} />
+          <ValueChart points={history} currency={historyCurrency} />
         ) : (
           <div className="empty-chart">
             <Icon name="activity" size={22} />
@@ -159,13 +163,13 @@ export function Overview() {
       </section>
 
       <section className="kpis s12" aria-label="Key figures">
-        <div className="card kpi"><span className="sub">Net invested</span><span className="kpi-v num money">{money(totals?.book_value, currency)}</span><span className="muted">Book value across accounts</span></div>
+        <div className="card kpi"><span className="sub">Net invested</span><span className="kpi-v num money">{money(totals?.book_value, valueCurrency)}</span><span className="muted">Book value across accounts</span></div>
         <div className="card kpi">
           <span className="sub">Unrealized gain</span>
-          <span className={`kpi-v num money ${(totals?.unrealized_pl || 0) < 0 ? "neg" : "pos"}`}>{signedMoney(totals?.unrealized_pl, currency)}</span>
+          <span className={`kpi-v num money ${(totals?.unrealized_pl || 0) < 0 ? "neg" : "pos"}`}>{signedMoney(totals?.unrealized_pl, valueCurrency)}</span>
           <div className="row"><span className={`chip ${(totals?.unrealized_pl || 0) < 0 ? "chip-neg" : "chip-pos"}`}>{pct(totals?.unrealized_pl_pct)}</span><span className="muted">on priced holdings</span></div>
         </div>
-        <div className="card kpi"><span className="sub">Cash ready to invest</span><span className="kpi-v num money">{money(totals?.investable_cash, currency)}</span><a className="link" href={href("/holdings", { status: "cash" })}>See cash</a></div>
+        <div className="card kpi"><span className="sub">Cash ready to invest</span><span className="kpi-v num money">{money(totals?.investable_cash, valueCurrency)}</span><a className="link" href={href("/holdings", { status: "cash" })}>See cash</a></div>
         <div className="card kpi">
           <span className="sub">Room left · {yearLabel(year)}</span>
           <span className="kpi-v num money">{money(roomLeft)}</span>
@@ -194,7 +198,7 @@ export function Overview() {
                 <div className="acct-top">
                   <span className={`acct-av tint-c${index + 1}`}>{name.slice(0, 2)}</span>
                   <div className="acct-n"><b>{name}</b><span className="muted">Invested value</span></div>
-                  <div className="acct-v"><b className="num money">{money(pl?.marketReporting, currency)}</b><span className={`num ${(pl?.plReporting || 0) < 0 ? "neg" : "pos"}`}>{pct(pl?.plPct)}</span></div>
+                  <div className="acct-v"><b className="num money">{money(pl?.marketReporting, valueCurrency)}</b><span className={`num ${(pl?.plReporting || 0) < 0 ? "neg" : "pos"}`}>{pct(pl?.plPct)}</span></div>
                 </div>
                 {limit && (
                   <>
@@ -228,8 +232,8 @@ export function Overview() {
         ) : (
           <div className="alloc">
             <div className="donut">
-              <Donut data={allocation} currency={currency} />
-              <div className="donut-c"><span className="muted">Total</span><b className="num money">{money(allocationTotal, currency, 0)}</b><span className="muted">{allocation.length} groups</span></div>
+              <Donut data={allocation} currency={valueCurrency} />
+              <div className="donut-c"><span className="muted">Total</span><b className="num money">{money(allocationTotal, valueCurrency, 0)}</b><span className="muted">{allocation.length} groups</span></div>
             </div>
             <ul className="lgl">
               {allocation.map((row, index) => {
@@ -239,7 +243,7 @@ export function Overview() {
                     <span className={`d fill-c${index + 1}`} />
                     <span className="ell">{row.label}</span>
                     <span className="lgb"><span className={`fill-c${index + 1}`} style={{ width: `${Math.min(100, (row.value / allocation[0].value) * 100)}%` }} /></span>
-                    <span className="lgv num money">{money(row.value, currency, 0)}</span>
+                    <span className="lgv num money">{money(row.value, valueCurrency, 0)}</span>
                     <span className="lgp num">{share.toFixed(1)}%</span>
                   </li>
                 );
@@ -253,11 +257,11 @@ export function Overview() {
         <div className="card-h">
           <div><h2 className="card-t" id="flow-t">Money in vs invested</h2><span className="muted">Monthly{year === "all" ? ", last 12 months" : `, ${year}`}</span></div>
           <div className="ftot">
-            <div><span className="sub"><i className="d fill-c1" />Contributed</span><b className="num money">{money(flowTotals.contributions, currency, 0)}</b></div>
-            <div><span className="sub"><i className="d fill-c2" />Invested (net)</span><b className="num money">{money(flowTotals.investments, currency, 0)}</b></div>
+            <div><span className="sub"><i className="d fill-c1" />Contributed</span><b className="num money">{money(flowTotals.contributions, flowCurrency, 0)}</b></div>
+            <div><span className="sub"><i className="d fill-c2" />Invested (net)</span><b className="num money">{money(flowTotals.investments, flowCurrency, 0)}</b></div>
           </div>
         </div>
-        {flow.length ? <FlowChart data={flow} currency={currency} /> : <p className="empty">No contributions or trades in this period.</p>}
+        {flow.length ? <FlowChart data={flow} currency={flowCurrency} /> : <p className="empty">No contributions or trades in this period.</p>}
       </section>
 
       <section className="card s5" aria-labelledby="act-t">
