@@ -28,7 +28,7 @@ def client():
 
     app.dependency_overrides[get_db] = override_db
     # No `with`: skip the lifespan so startup seeding never touches a real database.
-    yield TestClient(app)
+    yield TestClient(app, base_url="http://localhost")
     app.dependency_overrides.clear()
 
 
@@ -54,6 +54,15 @@ def test_mutation_blocked_without_header(client, monkeypatch):
     monkeypatch.setattr(settings, "api_token", None)
     files = {"file": ("backup.json", b"{}", "application/json")}
     assert client.post("/import-backup", files=files).status_code == 403
+
+
+def test_unknown_host_rejected(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_token", None)
+    headers = {"X-Requested-With": "master-terminal"}
+    assert client.get("/export", headers={**headers, "Host": "evil.example"}).status_code == 400
+    assert client.get("/health", headers={"Host": "evil.example:8000"}).status_code == 400
+    assert client.get("/health", headers={"Host": "127.0.0.1:8000"}).status_code == 200
+    assert client.get("/platforms", headers={**headers, "Host": "localhost:8000"}).status_code == 200
 
 
 def test_preflight_allowed_for_frontend_origin(client):

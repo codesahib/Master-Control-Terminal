@@ -75,6 +75,12 @@ class AccountTransactionCreate(BaseModel):
             raise ValueError("funding contributions must be unique")
         if len({source.platform_name.lower() for source in self.funding_cash_sources}) != len(self.funding_cash_sources):
             raise ValueError("funding cash sources must be unique")
+        if (
+            self.transaction_type in {TransactionType.investment_buy, TransactionType.investment_sell}
+            and self.quantity is not None
+            and self.quantity <= 0
+        ):
+            raise ValueError("buys and sells need a positive quantity; leave it empty for a manually valued holding")
         if self.transaction_type == TransactionType.withdrawal and (
             self.amount <= 0
             or self.symbol

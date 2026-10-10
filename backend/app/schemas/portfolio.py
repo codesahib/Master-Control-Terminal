@@ -24,6 +24,8 @@ class PortfolioHealthRead(BaseModel):
 
 
 class PortfolioTotalsRead(BaseModel):
+    currency: str
+    fx_missing: bool
     book_value: float
     market_value: float
     unrealized_pl: float
@@ -48,10 +50,12 @@ class PortfolioHistoryPoint(BaseModel):
     date: dt.date
     book_value: float
     market_value: float
+    currency: str
 
 
 class TimeSeriesRead(BaseModel):
     month: str
+    currency: str
     contributions: float
     investments: float
     withdrawals: float

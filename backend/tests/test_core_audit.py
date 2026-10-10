@@ -51,12 +51,7 @@ def make_session():
 
 
 def freeze_today(monkeypatch, frozen: date):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return frozen
-
-    monkeypatch.setattr(finance, "date", FrozenDate)
+    monkeypatch.setattr(finance, "market_date", lambda: frozen)
 
 
 def add_accounts(db, *names):
@@ -87,22 +82,37 @@ def test_tracked_years_follow_data_and_the_current_year():
         assert tracked_years(db, today=date(2026, 6, 1))[0] == 2021
 
 
-def test_seeding_adds_the_new_year_and_checks_each_row(monkeypatch):
+def test_empty_limits_get_the_baseline_and_the_new_year():
     Session = make_session()
     with Session() as db:
         rrsp, tfsa, fhsa = add_accounts(db, "RRSP", "TFSA", "FHSA")
-        db.add(ContributionLimit(account_id=tfsa.id, tax_year="2026", new_room=7500))
+        db.commit()
+        seed_contribution_limits(db, today=date(2027, 1, 1))
+        seed_contribution_limits(db, today=date(2027, 1, 1))
+        rows = {(row.account_id, row.tax_year): float(row.new_room) for row in db.scalars(select(ContributionLimit))}
+        assert len(rows) == 12
+        assert (rows[(tfsa.id, "2027")], rows[(fhsa.id, "2027")], rows[(rrsp.id, "2027")]) == (7000, 8000, 0)
+
+
+def test_existing_limits_only_roll_accounts_that_had_last_year():
+    Session = make_session()
+    with Session() as db:
+        rrsp, tfsa, fhsa = add_accounts(db, "RRSP", "TFSA", "FHSA")
+        db.add_all([
+            ContributionLimit(account_id=tfsa.id, tax_year="2026", new_room=7500),
+            ContributionLimit(account_id=rrsp.id, tax_year="2026", new_room=12000),
+        ])
         db.commit()
 
         seed_contribution_limits(db, today=date(2027, 1, 1))
-        seed_contribution_limits(db, today=date(2027, 1, 1))
 
         rows = {(row.account_id, row.tax_year): float(row.new_room) for row in db.scalars(select(ContributionLimit))}
-        assert len(rows) == 12
-        assert rows[(tfsa.id, "2026")] == 7500
-        assert rows[(tfsa.id, "2027")] == 7500
-        assert rows[(fhsa.id, "2027")] == 8000
-        assert rows[(rrsp.id, "2027")] == 0
+        assert rows == {
+            (tfsa.id, "2026"): 7500,
+            (rrsp.id, "2026"): 12000,
+            (tfsa.id, "2027"): 7500,
+            (rrsp.id, "2027"): 0,
+        }
 
 
 def test_reference_seeding_is_not_skipped_by_an_extra_account():
@@ -220,6 +230,52 @@ def test_account_names_are_validated_and_never_created():
             upsert_contribution_limit(db, "FOO", "2026", 100)
         db.rollback()
         assert db.scalar(select(func.count(Account.id))) == 1
+
+
+def test_buys_and_sells_need_a_positive_quantity():
+    base = dict(transaction_date="2026-01-01", account_name="TFSA", platform_name="Wealthsimple", symbol="XEQT", amount=100)
+    assert AccountTransactionCreate(transaction_type=TransactionType.investment_buy, **base).quantity is None
+    for transaction_type in (TransactionType.investment_buy, TransactionType.investment_sell):
+        for quantity in (0, -10):
+            with pytest.raises(ValidationError, match="positive quantity"):
+                AccountTransactionCreate(transaction_type=transaction_type, quantity=quantity, **base)
+
+
+def test_restore_repairs_legacy_funding_and_duplicate_rows():
+    def v1_payload(limit_rooms):
+        return {
+            "meta": {"format": finance.BACKUP_FORMAT, "version": 1},
+            "data": {
+                "accounts": [{"id": 1, "name": "TFSA"}],
+                "platforms": [{"id": 1, "canonical_name": "Wealthsimple"}],
+                "categories": [
+                    {"id": 1, "broad": "All Equity", "precise": "US Equity"},
+                    {"id": 2, "broad": "all equity ", "precise": "us equity"},
+                ],
+                "instruments": [{"id": 1, "symbol": "VFV", "category_id": 2, "is_active": True}],
+                "contribution_limits": [{"id": index + 1, "account_id": 1, "tax_year": "2025", "new_room": room} for index, room in enumerate(limit_rooms)],
+                "transactions": [
+                    {"id": 10, "transaction_type": "contribution", "transaction_date": "2025-01-05", "account_id": 1, "platform_id": 1, "instrument_id": None, "category_id": None, "amount": 500, "fees": None, "quantity": None, "currency": "CAD", "contribution_id": None},
+                    {"id": 11, "transaction_type": "investment_buy", "transaction_date": "2025-01-06", "account_id": 1, "platform_id": 1, "instrument_id": 1, "category_id": 2, "amount": 100, "fees": 1.5, "quantity": 1, "currency": "CAD", "contribution_id": 10},
+                ],
+                "imports": [],
+            },
+        }
+
+    Session = make_session()
+    with Session() as db:
+        finance.restore_all_data(db, v1_payload([7000, 7000]))
+
+        funding = db.scalar(select(TransactionFunding))
+        assert (funding.transaction_id, funding.contribution_id, float(funding.amount)) == (11, 10, 101.5)
+        assert db.scalar(select(func.count(Category.id))) == 1
+        assert db.get(Transaction, 11).category_id == 1
+        assert db.get(Instrument, 1).category_id == 1
+        assert db.scalar(select(func.count(ContributionLimit.id))) == 1
+        assert list_available_contributions(db, "TFSA")[0]["remaining_amount"] == 398.5
+
+        with pytest.raises(ValueError, match="conflicting contribution limits for TFSA 2025"):
+            finance.restore_all_data(db, v1_payload([7000, 6500]))
 
 
 def test_withdrawals_reject_symbol_quantity_and_funding():
@@ -372,7 +428,7 @@ def test_routes_status_codes_page_size_and_backup_version():
 
     app.dependency_overrides[get_db] = override_db
     try:
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://localhost")
         assert client.post("/transactions", json={}, headers=HEADERS).status_code == 405
 
         created = [

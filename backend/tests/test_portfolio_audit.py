@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta
 
+import pytest
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -22,6 +24,7 @@ from app.services.portfolio import (
     distribution,
     list_holdings,
     portfolio_health,
+    portfolio_history,
     portfolio_overview,
     portfolio_summary,
     record_portfolio_snapshots,
@@ -108,7 +111,7 @@ def test_allocation_converts_usd_uses_market_value_and_matches_distribution():
         assert sector["Cash"] == 490
         assert sector["Uncategorized"] == 660  # XEQT market value 600 + 60, no category
         assert accounts == {"TFSA": 1350, "RRSP": 10}
-        assert {row["label"]: row["value"] for row in distribution(db, "account", currency="USD")}["TFSA"] == round(1350 / 1.4, 2)
+        assert {row["label"]: row["value"] for row in distribution(db, "account", currency="USD")}["TFSA"] == pytest.approx(1350 / 1.4, abs=0.01)
 
 
 def test_missing_fx_rate_is_flagged_not_silently_dropped():
@@ -183,6 +186,7 @@ def test_timeseries_nets_sells_and_reports_withdrawals_and_dividends_in_cad():
         assert timeseries(db, year=2026) == [
             {
                 "month": "2026-01",
+                "currency": "CAD",
                 "contributions": 1000 + 200 * 1.4,
                 "investments": 500 + 140 + 50 - 120,
                 "withdrawals": 100,
@@ -209,7 +213,7 @@ def test_overview_totals_and_snapshot_history():
 
         client = _client(db)
         history = client.get("/portfolio/history", headers={"X-Requested-With": "master-terminal"}).json()
-        assert history == [{"date": str(utcnow().date()), "book_value": 1180, "market_value": 1360}]
+        assert history == [{"date": str(utcnow().date()), "book_value": 1180, "market_value": 1360, "currency": "CAD"}]
 
 
 def test_sort_pl_rows_by_market_value_puts_unpriced_rows_last():
@@ -225,7 +229,7 @@ def test_sort_pl_rows_by_market_value_puts_unpriced_rows_last():
 
 def _client(db):
     app.dependency_overrides[get_db] = lambda: db
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost")
 
 
 def test_portfolio_endpoints_respond_and_symbol_conflict_is_409():
@@ -251,3 +255,44 @@ def test_portfolio_endpoints_respond_and_symbol_conflict_is_409():
         assert pl.json()["items"][0]["symbol"] == "XEQT"  # 660 CAD beats NVDA 210 CAD
         assert conflict.status_code == 409
         assert saved.status_code == 200 and saved.json()["symbol"] == "ZAG"
+
+
+def test_usd_reporting_converts_overview_history_and_timeseries():
+    with _sessionmaker()() as db:
+        _portfolio(db)
+        record_portfolio_snapshots(db)
+
+        cad = portfolio_overview(db)["totals"]
+        usd = portfolio_overview(db, currency="USD")["totals"]
+        history = portfolio_history(db, currency="USD")
+        months = timeseries(db, year=2026, currency="USD")
+
+        assert (cad["currency"], cad["fx_missing"]) == ("CAD", False)
+        assert (usd["currency"], usd["fx_missing"]) == ("USD", False)
+        assert usd["market_value"] == pytest.approx(1360 / 1.4, abs=0.02)
+        assert usd["investable_cash"] == pytest.approx(540 / 1.4, abs=0.02)
+        assert history[0]["currency"] == "USD"
+        assert history[0]["book_value"] == pytest.approx(1180 / 1.4, abs=0.01)
+        # USD transactions keep their native amount; CAD ones divide by the rate.
+        assert months[0]["currency"] == "USD"
+        assert months[0]["contributions"] == pytest.approx(1000 / 1.4 + 200, abs=0.01)
+
+
+def test_usd_request_without_rate_falls_back_to_cad_and_flags_it():
+    with _sessionmaker()() as db:
+        _portfolio(db, fx_rate=None)
+        client = _client(db)
+        headers = {"X-Requested-With": "master-terminal"}
+        try:
+            overview = client.get("/portfolio/overview?currency=USD", headers=headers).json()
+            history = client.get("/portfolio/history?currency=USD", headers=headers)
+            months = client.get("/analytics/timeseries?year=2026&currency=USD", headers=headers).json()
+            bad = client.get("/portfolio/overview?currency=EUR", headers=headers)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert (overview["totals"]["currency"], overview["totals"]["fx_missing"]) == ("CAD", True)
+        assert overview["totals"]["book_value"] == 900  # CAD rows only; USD rows counted in health
+        assert history.status_code == 200
+        assert months[0]["currency"] == "CAD" and months[0]["contributions"] == 1000
+        assert bad.status_code == 422
