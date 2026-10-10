@@ -302,6 +302,8 @@ def test_custom_symbol_stays_manual():
     Base.metadata.create_all(engine)
 
     with Session() as db:
+        db.add(Account(name="RRSP"))
+        db.commit()
         create_account_transaction(
             db,
             AccountTransactionCreate(

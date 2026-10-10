@@ -51,7 +51,7 @@ def test_list_contributions_and_account_transactions_are_separated():
         assert activity[0][0].transaction_type == TransactionType.investment_buy
 
 
-def test_rrsp_account_transactions_use_the_rrsp_contribution_period():
+def test_rrsp_account_transactions_use_calendar_years():
     engine = create_engine("sqlite:///:memory:", future=True)
     Session = sessionmaker(bind=engine, future=True)
     Base.metadata.create_all(engine)
@@ -82,8 +82,7 @@ def test_rrsp_account_transactions_use_the_rrsp_contribution_period():
         db.commit()
 
         rows, total = list_account_transactions(db, account="RRSP", year=2025)
-        assert total == 1
-        assert [row[0].transaction_date for row in rows] == [date(2026, 1, 9)]
+        assert total == 0
         rows, total = list_account_transactions(db, account="RRSP", year=2026)
-        assert total == 1
-        assert [row[0].transaction_date for row in rows] == [date(2026, 3, 3)]
+        assert total == 2
+        assert [row[0].transaction_date for row in rows] == [date(2026, 3, 3), date(2026, 1, 9)]

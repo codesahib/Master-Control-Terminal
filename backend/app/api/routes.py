@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -33,26 +33,26 @@ from app.schemas.schemas import (
     PortfolioSummaryRead,
     SymbolRead,
     TimeSeriesPoint,
-    TransactionCreate,
-    TransactionRead,
 )
 from app.services.finance import (
+    BACKUP_FORMAT,
+    BACKUP_FORMAT_VERSION,
+    ConflictError,
     create_account_transaction,
     create_contribution,
     create_import_preview,
-    create_transaction,
+    delete_transaction,
     export_all_data,
     get_all_contribution_room,
     get_contribution_room,
     list_available_contributions,
     list_contribution_limits,
     restore_all_data,
-    TRACKED_YEARS,
+    tracked_years,
     upsert_manual_valuation,
     upsert_contribution_limit,
     update_account_transaction,
     update_contribution,
-    update_transaction,
 )
 from app.services.market_data import refresh_market_prices, search_symbols
 from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, timeseries
@@ -67,9 +67,23 @@ from app.services.transaction_reads import (
 router = APIRouter()
 
 
+def _run(db: Session, operation, *args):
+    try:
+        return operation(db, *args)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/years", response_model=list[int])
-def list_years():
-    return [int(year) for year in TRACKED_YEARS]
+def list_years(db: Session = Depends(get_db)):
+    return tracked_years(db)
 
 
 @router.get("/platforms", response_model=list[str])
@@ -93,11 +107,7 @@ def refresh_market_prices_endpoint(db: Session = Depends(get_db)):
 
 @router.post("/manual-valuations")
 def upsert_manual_valuation_endpoint(payload: ManualValuationUpsert, db: Session = Depends(get_db)):
-    try:
-        snapshot = upsert_manual_valuation(db, payload)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    snapshot = _run(db, upsert_manual_valuation, payload)
     return {
         "id": snapshot.id,
         "snapshot_date": snapshot.snapshot_date,
@@ -131,28 +141,6 @@ def portfolio_summary_endpoint(
     return portfolio_summary(db, year=year)
 
 
-@router.post("/transactions", response_model=TransactionRead)
-def create_transaction_endpoint(payload: TransactionCreate, db: Session = Depends(get_db)):
-    try:
-        txn = create_transaction(db, payload)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return transaction_read(db, txn)
-
-
-@router.put("/transactions/{transaction_id}", response_model=TransactionRead)
-def update_transaction_endpoint(transaction_id: int, payload: TransactionCreate, db: Session = Depends(get_db)):
-    try:
-        txn = update_transaction(db, transaction_id, payload)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    return transaction_read(db, txn)
-
-
 @router.get("/transactions", response_model=PaginatedTransactionRead)
 def list_transactions_endpoint(
     transaction_type: TransactionType | None = Query(default=None),
@@ -161,30 +149,37 @@ def list_transactions_endpoint(
     symbol: str | None = Query(default=None),
     year: int | None = Query(default=None),
     page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
     items, total = transaction_reads(
         db, transaction_type=transaction_type, account=account, platform=platform, symbol=symbol,
-        year=year, page=page, sort_direction=sort_direction,
+        year=year, page=page, page_size=page_size, sort_direction=sort_direction,
     )
     return PaginatedTransactionRead(
-        items=items, total=total, page=page, page_size=10
+        items=items, total=total, page=page, page_size=page_size
     )
 
 
 @router.post("/contributions", response_model=ContributionRead)
 def create_contribution_endpoint(payload: ContributionCreate, db: Session = Depends(get_db)):
-    txn = create_contribution(db, payload)
+    txn = _run(db, create_contribution, payload)
     return contribution_read(db, txn)
 
 
 @router.put("/contributions/{transaction_id}", response_model=ContributionRead)
 def update_contribution_endpoint(transaction_id: int, payload: ContributionCreate, db: Session = Depends(get_db)):
-    txn = update_contribution(db, transaction_id, payload)
+    txn = _run(db, update_contribution, transaction_id, payload)
     if not txn:
         raise HTTPException(status_code=404, detail="Contribution not found")
     return contribution_read(db, txn)
+
+
+@router.delete("/contributions/{transaction_id}", status_code=204)
+def delete_contribution_endpoint(transaction_id: int, db: Session = Depends(get_db)):
+    _run(db, delete_transaction, transaction_id, True)
+    return Response(status_code=204)
 
 
 @router.get("/contributions", response_model=list[ContributionRead])
@@ -208,24 +203,22 @@ def list_available_contributions_endpoint(
 
 @router.post("/account-transactions", response_model=AccountTransactionRead)
 def create_account_transaction_endpoint(payload: AccountTransactionCreate, db: Session = Depends(get_db)):
-    try:
-        txn = create_account_transaction(db, payload)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    txn = _run(db, create_account_transaction, payload)
     return transaction_read(db, txn)
 
 
 @router.put("/account-transactions/{transaction_id}", response_model=AccountTransactionRead)
 def update_account_transaction_endpoint(transaction_id: int, payload: AccountTransactionCreate, db: Session = Depends(get_db)):
-    try:
-        txn = update_account_transaction(db, transaction_id, payload)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    txn = _run(db, update_account_transaction, transaction_id, payload)
     if not txn:
         raise HTTPException(status_code=404, detail="Account transaction not found")
     return transaction_read(db, txn)
+
+
+@router.delete("/account-transactions/{transaction_id}", status_code=204)
+def delete_account_transaction_endpoint(transaction_id: int, db: Session = Depends(get_db)):
+    _run(db, delete_transaction, transaction_id, False)
+    return Response(status_code=204)
 
 
 @router.get("/account-transactions", response_model=PaginatedAccountTransactionRead)
@@ -236,15 +229,16 @@ def list_account_transactions_endpoint(
     year: int | None = Query(default=None),
     transaction_type: TransactionType | None = Query(default=None),
     page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     sort_direction: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
     items, total = account_transaction_reads(
         db, account=account, platform=platform, symbol=symbol, year=year,
-        transaction_type=transaction_type, page=page, sort_direction=sort_direction,
+        transaction_type=transaction_type, page=page, page_size=page_size, sort_direction=sort_direction,
     )
     return PaginatedAccountTransactionRead(
-        items=items, total=total, page=page, page_size=10
+        items=items, total=total, page=page, page_size=page_size
     )
 
 
@@ -280,13 +274,8 @@ def update_contribution_limit(
     db: Session = Depends(get_db),
 ):
     if not tax_year.isdigit() or len(tax_year) != 4:
-        raise HTTPException(status_code=400, detail="tax_year must be a 4-digit year")
-    return upsert_contribution_limit(
-        db,
-        account,
-        tax_year,
-        payload.new_room,
-    )
+        raise HTTPException(status_code=422, detail="tax_year must be a 4-digit year")
+    return _run(db, upsert_contribution_limit, account, tax_year, payload.new_room)
 
 
 @router.get("/analytics/distribution", response_model=list[DistributionPoint])
@@ -315,8 +304,8 @@ def export_data(db: Session = Depends(get_db)):
     payload = {
         "meta": {
             "exported_at": exported_at,
-            "format": "master-control-terminal-export",
-            "version": 2,
+            "format": BACKUP_FORMAT,
+            "version": BACKUP_FORMAT_VERSION,
         },
         "data": export_all_data(db),
     }
@@ -328,18 +317,25 @@ def export_data(db: Session = Depends(get_db)):
 
 
 @router.post("/import-backup")
-async def import_backup(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_backup(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename or not file.filename.lower().endswith(".json"):
         raise HTTPException(status_code=400, detail="Please upload a JSON backup file")
 
     try:
-        payload = json.loads(await file.read())
-    except json.JSONDecodeError as exc:
+        payload = json.loads(file.file.read())
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Backup file is not valid JSON") from exc
-
-    meta = payload.get("meta", {})
-    if meta.get("format") != "master-control-terminal-export":
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Backup file must contain a JSON object")
+    meta = payload.get("meta") or {}
+    if meta.get("format") != BACKUP_FORMAT:
         raise HTTPException(status_code=400, detail="Unsupported backup format")
+    version = meta.get("version", 1)
+    if not isinstance(version, int) or not 1 <= version <= BACKUP_FORMAT_VERSION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported backup version {version}; this app restores versions 1 to {BACKUP_FORMAT_VERSION}",
+        )
 
     try:
         restore_all_data(db, payload)
