@@ -3,14 +3,17 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: ${DATABASE_POOLER_URL:-${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/master_terminal}}
+      API_TOKEN: ${API_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-5173}}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
 
   web:
     build: ./frontend
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: http://localhost:${API_PORT:-8000}
+      VITE_API_TOKEN: ${API_TOKEN:-}
     ports:
-      - "5173:5173"
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
     depends_on:
       - api
