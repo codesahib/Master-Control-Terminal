@@ -96,7 +96,7 @@ export function Account({ name }: { name: string }) {
       <section className="card s12" aria-labelledby="derived-t">
         <div className="card-h"><h2 className="card-t" id="derived-t">Derived holdings</h2><span className="muted">Built from your transactions, at book value</span></div>
         <div className="tbl-wrap">
-          <table className="tbl tbl-sticky">
+          <table className="tbl tbl-sticky compact">
             <thead>
               <tr><th>Symbol</th><th className="r">Quantity</th><th className="r">Avg cost</th><th className="r">Book value</th><th>Category</th><th>As of</th><th><span className="sr-only">Expand</span></th></tr>
             </thead>

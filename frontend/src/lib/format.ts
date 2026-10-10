@@ -99,7 +99,3 @@ export function errorMessage(error: any, fallback = "Something went wrong. Try a
   if (error?.message === "Network Error") return "Cannot reach the API. Is it running?";
   return fallback;
 }
-
-export function isNotFound(error: any) {
-  return error?.response?.status === 404 || error?.response?.status === 405;
-}

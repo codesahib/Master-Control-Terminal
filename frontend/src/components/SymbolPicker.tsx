@@ -10,7 +10,7 @@ interface Props {
   onCustomChange: (isCustom: boolean) => void;
   selectedName?: string;
   selected: boolean;
-  onSelect: (symbol: SymbolSearchResult) => void;
+  onSelect: (symbol: SymbolSearchResult) => Promise<void> | void;
 }
 
 // Isolated so a future "save chosen candidate" endpoint only changes onSelect wiring.
@@ -55,7 +55,7 @@ export function SymbolPicker({ query, onQueryChange, isCustom, onCustomChange, s
       {results.length > 0 && (
         <div className="symbol-results" id="tx-symbol-results" role="listbox">
           {results.map((symbol) => (
-            <button className="symbol-result" type="button" role="option" aria-selected="false" key={`${symbol.id}-${symbol.provider_symbol}`} onClick={() => onSelect(symbol)}>
+            <button className="symbol-result" type="button" role="option" aria-selected="false" key={symbol.id ?? symbol.provider_symbol} onClick={() => onSelect(symbol)}>
               <span className="tk">{symbol.symbol.slice(0, 4)}</span>
               <span className="symbol-text">
                 <b className="mono">{symbol.provider_symbol}</b>

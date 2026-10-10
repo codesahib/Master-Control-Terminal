@@ -35,7 +35,6 @@ export interface AccountTransaction extends ActivityRecord {
   fee_currency?: string;
   source_amount?: number;
   source_currency?: string;
-  contribution_id?: number;
   funding_contributions?: FundingContribution[];
 }
 
@@ -138,7 +137,7 @@ export interface ContributionLimitSetting {
 }
 
 export interface SymbolSearchResult {
-  id: number;
+  id?: number | null;
   symbol: string;
   provider_symbol: string;
   name?: string;
@@ -198,6 +197,7 @@ export interface PortfolioHealth {
   missing_price: number;
   missing_quantity: number;
   stale: number;
+  fx_missing?: number;
   negative_cash: CashRow[];
   idle_cash: CashRow[];
   prices_updated_at?: string | null;

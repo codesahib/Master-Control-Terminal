@@ -1109,6 +1109,8 @@ textarea.inp {
 
 /* Tables: scroll sideways with a sticky first column; data-label tables turn into cards on phones. */
 .tbl-wrap {
+  /* positioned so absolutely placed children (sr-only labels) stay inside the scroll box */
+  position: relative;
   margin: 0 -20px;
   overflow-x: auto;
 }
@@ -1152,6 +1154,12 @@ textarea.inp {
 }
 .tbl-sticky {
   min-width: 960px;
+}
+.tbl-sticky td {
+  white-space: nowrap;
+}
+.tbl-sticky.compact {
+  min-width: 720px;
 }
 .tbl-sticky th:first-child,
 .tbl-sticky td:first-child {
@@ -1285,6 +1293,7 @@ textarea.inp {
 .list-row,
 .action-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-height: 56px;
@@ -2002,6 +2011,9 @@ a.list-row:hover {
   }
   .ftot {
     display: none;
+  }
+  .empty-chart {
+    min-height: 120px;
   }
   .kpi-v {
     font-size: 19px;

@@ -50,7 +50,7 @@ function ModalHost() {
     case "new":
       return (
         <Dialog title="Add" size="sm" onClose={closeModal}>
-          <div className="sheet-menu">
+          <div className="sheet-menu" role="menu" aria-label="Create">
             <NewItem icon="transfer" title="Transaction" sub="Buy, sell, dividend, transfer, FX" tone="c2" onClick={() => openModal({ kind: "transaction", account: modal.account })} />
             <NewItem icon="contribution" title="Contribution" sub="Money into RRSP, TFSA or FHSA" tone="c1" onClick={() => openModal({ kind: "contribution", account: modal.account })} />
             <NewItem icon="withdrawal" title="Withdrawal" sub="Cash taken out of an account" tone="c5" onClick={() => openModal({ kind: "transaction", account: modal.account, type: "withdrawal" })} />

@@ -104,9 +104,16 @@ export function AccountTransactionModal({
       .catch(() => setContributions([]));
   }, [form.account_name, requiresFunding, transaction?.id]);
 
-  function selectSymbol(symbol: SymbolSearchResult) {
-    set({ instrument_id: symbol.id, symbol: symbol.symbol, currency: symbol.currency || form.currency, instrument_name: symbol.name || form.instrument_name });
-    setSymbolQuery(symbol.provider_symbol);
+  async function selectSymbol(candidate: SymbolSearchResult) {
+    setError("");
+    try {
+      // Search returns unsaved Yahoo candidates (id null); save the chosen one first.
+      const symbol = candidate.id == null ? (await api.post<SymbolSearchResult>("/symbols", candidate)).data : candidate;
+      set({ instrument_id: symbol.id ?? undefined, symbol: symbol.symbol, currency: symbol.currency || form.currency, instrument_name: symbol.name || form.instrument_name });
+      setSymbolQuery(symbol.provider_symbol);
+    } catch (exc) {
+      setError(errorMessage(exc, "Could not save that symbol."));
+    }
   }
 
   function toggleFundingCashSource(contribution: ContributionFunding) {

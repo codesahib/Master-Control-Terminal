@@ -3,22 +3,10 @@ import { Donut, FlowChart, ValueChart } from "../components/Charts";
 import { Icon, IconName } from "../components/Icon";
 import { ACCOUNT_NAMES, CurrencySwitch } from "../components/Shell";
 import { useApp, yearLabel, yearParams } from "../context";
-import { isNotFound, money, pct, shortDate, signedMoney, timeAgo, TYPE_LABELS } from "../lib/format";
+import { errorMessage, money, pct, shortDate, signedMoney, timeAgo, TYPE_LABELS } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { href } from "../router";
-import type {
-  ContributionRoom,
-  DistributionPoint,
-  HistoryPoint,
-  PaginatedPortfolioPL,
-  PaginatedTransactions,
-  PortfolioHealth,
-  PortfolioOverview,
-  PortfolioPLRow,
-  PortfolioSummary,
-  PortfolioTotals,
-  TimeSeriesPoint,
-} from "../types";
+import type { ContributionRoom, HistoryPoint, PaginatedTransactions, PortfolioOverview, TimeSeriesPoint } from "../types";
 
 type Tab = "sector" | "account" | "platform";
 const RANGES = ["1M", "3M", "YTD", "1Y", "All"] as const;
@@ -34,37 +22,6 @@ function daysUntil(date: Date) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((date.getTime() - today.getTime()) / 86400000);
-}
-
-function leaves(rows: PortfolioPLRow[]) {
-  return rows.flatMap((row) => (row.children?.length ? row.children : [row]));
-}
-
-// Used only until /portfolio/health exists on the API.
-function healthFromRows(rows: PortfolioPLRow[]): PortfolioHealth {
-  const leafRows = leaves(rows);
-  const cash = leafRows.filter((row) => row.record_type === "cash").map((row) => ({ account_name: row.account_name, platform_name: row.platform_name, currency: row.currency, amount: row.book_value }));
-  return {
-    missing_price: leafRows.filter((row) => row.price_status === "missing").length,
-    missing_quantity: leafRows.filter((row) => row.price_status === "missing_quantity").length,
-    stale: leafRows.filter((row) => row.price_status === "stale").length,
-    negative_cash: cash.filter((row) => row.amount < -0.005),
-    idle_cash: cash.filter((row) => row.amount > 0.005),
-    prices_updated_at: leafRows.map((row) => row.priced_at).filter(Boolean).sort().pop() || null,
-  };
-}
-
-function totalsFromSummary(summary: PortfolioSummary): PortfolioTotals {
-  const market = summary.allocation.reduce((sum, row) => sum + row.value, 0);
-  const unrealized = summary.account_pl.reduce((sum, row) => sum + row.plReporting, 0);
-  const pricedBook = summary.account_pl.reduce((sum, row) => sum + row.bookReporting, 0);
-  return {
-    market_value: market,
-    book_value: market - unrealized,
-    unrealized_pl: unrealized,
-    unrealized_pl_pct: pricedBook ? (unrealized / pricedBook) * 100 : null,
-    investable_cash: summary.investable_cash.reduce((sum, row) => sum + (row.book_value_reporting ?? (row.currency === "CAD" ? row.book_value : 0)), 0),
-  };
 }
 
 function cutoff(range: (typeof RANGES)[number]) {
@@ -93,19 +50,15 @@ export function Overview() {
   const yp = yearParams(year);
 
   const overview = useApi<PortfolioOverview>("/portfolio/overview", { ...yp, category_level: categoryLevel });
-  const legacy = isNotFound(overview.error);
-  const summaryQ = useApi<PortfolioSummary>(legacy ? "/portfolio/summary" : null, yp);
-  const distQ = useApi<DistributionPoint[]>(legacy ? "/analytics/distribution" : null, { group_by: tab, category_level: categoryLevel, currency, ...yp });
-  const plQ = useApi<PaginatedPortfolioPL>(!apiHealth && legacy ? "/portfolio/pl" : null, { page_size: 500, ...yp });
   const roomQ = useApi<ContributionRoom[]>(year === "all" ? "/limits" : `/limits/${year}`);
   const historyQ = useApi<HistoryPoint[]>("/portfolio/history", { days: 400 });
   const flowQ = useApi<TimeSeriesPoint[]>("/analytics/timeseries", { ...yp, currency });
   const recentQ = useApi<PaginatedTransactions>("/transactions", { page: 1, page_size: 5, sort_direction: "desc", ...yp });
 
-  const summary = overview.data?.summary || summaryQ.data;
-  const totals = overview.data?.totals || (summary ? totalsFromSummary(summary) : undefined);
-  const health = apiHealth || overview.data?.health || (plQ.data ? healthFromRows(plQ.data.items) : undefined);
-  const distribution = overview.data?.distribution?.[tab] || distQ.data || [];
+  const summary = overview.data?.summary;
+  const totals = overview.data?.totals;
+  const health = apiHealth || overview.data?.health;
+  const distribution = overview.data?.distribution?.[tab] || [];
   const room = roomQ.data || [];
 
   const history = useMemo(() => {
@@ -129,6 +82,7 @@ export function Overview() {
   if (health?.missing_price) attention.push({ tone: "neg", icon: "warn", title: `${health.missing_price} holding${health.missing_price > 1 ? "s have" : " has"} no live price`, sub: "Market value and P/L are hidden for these.", action: { label: "Review", href: href("/holdings", { status: "missing" }) } });
   if (health?.missing_quantity) attention.push({ tone: "warn", icon: "edit", title: `${health.missing_quantity} holding${health.missing_quantity > 1 ? "s need" : " needs"} a value`, sub: "No quantity recorded. Add a manual value.", action: { label: "Update", href: href("/holdings", { status: "missing_quantity" }) } });
   if (health?.stale) attention.push({ tone: "warn", icon: "clock", title: `${health.stale} price${health.stale > 1 ? "s are" : " is"} older than 24 hours`, sub: `Last refresh ${timeAgo(health.prices_updated_at)}.`, action: { label: "Refresh", onClick: refreshPrices } });
+  if (health?.fx_missing) attention.push({ tone: "warn", icon: "currency_exchange", title: `${health.fx_missing} USD row${health.fx_missing > 1 ? "s have" : " has"} no exchange rate`, sub: "They are left out of CAD totals until prices refresh.", action: { label: "Refresh", onClick: refreshPrices } });
   health?.negative_cash.forEach((row) => attention.push({ tone: "neg", icon: "cash", title: `Negative cash in ${row.account_name}${row.platform_name ? ` · ${row.platform_name}` : ""}`, sub: `${money(row.amount, row.currency)}. A contribution or transfer may be missing.`, action: { label: "Check", href: href(`/accounts/${row.account_name}`) } }));
   const idleCad = (health?.idle_cash || []).filter((row) => row.currency === "CAD").reduce((sum, row) => sum + row.amount, 0);
   if (idleCad > 1) attention.push({ tone: "info", icon: "cash", title: `${money(idleCad)} cash is not invested`, sub: (health?.idle_cash || []).slice(0, 2).map((row) => `${row.account_name} ${row.platform_name || ""} ${money(row.amount, row.currency)}`).join(" · "), action: { label: "View", href: href("/holdings", { status: "cash" }) } });
@@ -145,6 +99,7 @@ export function Overview() {
 
   return (
     <div className="grid">
+      {overview.error && <p className="form-error s12" role="alert">{errorMessage(overview.error, "Portfolio data failed to load.")}</p>}
       <div className="phone-only filter-chips s12">
         <CurrencySwitch />
         <button className="chip-btn" type="button" onClick={refreshPrices}>
@@ -279,7 +234,7 @@ export function Overview() {
                   <li className="lgr" key={row.label}>
                     <span className={`d fill-c${index + 1}`} />
                     <span className="ell">{row.label}</span>
-                    <span className="lgb"><span className={`fill-c${index + 1}`} style={{ width: `${(share / ((allocation[0].value / allocationTotal) * 100)) * 100}%` }} /></span>
+                    <span className="lgb"><span className={`fill-c${index + 1}`} style={{ width: `${Math.min(100, (row.value / allocation[0].value) * 100)}%` }} /></span>
                     <span className="lgv num money">{money(row.value, "CAD", 0)}</span>
                     <span className="lgp num">{share.toFixed(1)}%</span>
                   </li>
