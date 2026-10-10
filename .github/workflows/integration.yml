@@ -1,0 +1,44 @@
+name: integration
+
+on:
+  push:
+    branches: [main, terminal-audit]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: master_terminal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d master_terminal"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/master_terminal
+      API_TOKEN: ci-token
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - name: Start API
+        run: |
+          nohup uvicorn app.main:app --port 8000 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/health && break; sleep 1; done
+      - name: Smoke test every endpoint
+        run: python ../scripts/audit/smoke_endpoints.py --api http://127.0.0.1:8000 --disposable --skip-network
+      - name: Data integrity checks
+        run: psql "postgresql://postgres:postgres@localhost:5432/master_terminal" -f ../scripts/audit/db_checks.sql
+      - name: API log
+        if: failure()
+        run: cat /tmp/api.log
