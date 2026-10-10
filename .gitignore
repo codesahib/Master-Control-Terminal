@@ -16,4 +16,5 @@ backend/.venv/
 .DS_Store
 Thumbs.db
 
-.codex
+.codex*.dump
+audit-output/

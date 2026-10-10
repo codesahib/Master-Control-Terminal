@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.time import utcnow
 from app.models.models import Instrument, MarketPrice, Transaction
 
 PROVIDER = "yfinance"
@@ -240,7 +241,7 @@ def fetch_price(provider_symbol: str) -> tuple[float, str | None, datetime]:
         if history.empty:
             raise ValueError("no recent price returned")
         price = float(history["Close"].dropna().iloc[-1])
-    return float(price), currency, datetime.utcnow()
+    return float(price), currency, utcnow()
 
 
 def fetch_usd_cad_rate() -> float:

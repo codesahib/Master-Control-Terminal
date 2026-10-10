@@ -12,6 +12,7 @@ from app.models.models import (
     Category,
     ContributionLimit,
     HoldingSnapshot,
+    PortfolioSnapshot,
     Import,
     ImportRow,
     ImportStatus,
@@ -92,7 +93,8 @@ def test_export_includes_persisted_records():
         import_row = ImportRow(import_id=imp.id, row_number=1, payload_json=json.dumps({"amount": 500}), error=None)
         funding = TransactionFunding(transaction_id=investment.id, contribution_id=transaction.id, amount=100)
         audit = AuditLog(operation="create", table_name="transactions", row_id="1")
-        db.add_all([import_row, funding, audit])
+        portfolio_snapshot = PortfolioSnapshot(snapshot_date=date(2026, 1, 2), account_id=account.id, book_value=100, market_value=110)
+        db.add_all([import_row, funding, audit, portfolio_snapshot])
         db.commit()
 
         exported = export_all_data(db)

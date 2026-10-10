@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.time import as_utc, utcnow
 from app.models.models import Account, Category, HoldingSnapshot, Instrument, Platform, Transaction, TransactionType
 from app.services.market_data import fetch_usd_cad_rate, latest_prices
 
@@ -344,7 +345,7 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
             row["market_value"] = market_value
             row["unrealized_pl"] = unrealized_pl
             row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
-            row["price_status"] = "stale" if price.priced_at < datetime.utcnow() - timedelta(hours=24) else "ok"
+            row["price_status"] = "stale" if as_utc(price.priced_at) < utcnow() - timedelta(hours=24) else "ok"
         _add_reporting_values(row, usd_cad_rate)
         rows.append(row)
     return rows

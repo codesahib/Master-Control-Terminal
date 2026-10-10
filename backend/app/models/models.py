@@ -1,9 +1,10 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.time import utcnow
 from app.db.session import Base
 
 
@@ -16,6 +17,7 @@ class TransactionType(str, enum.Enum):
     dividend_reinvestment = "dividend_reinvestment"
     quantity_adjustment = "quantity_adjustment"
     currency_exchange = "currency_exchange"
+    withdrawal = "withdrawal"
 
 
 class ImportType(str, enum.Enum):
@@ -83,7 +85,7 @@ class MarketPrice(Base):
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     provider: Mapped[str] = mapped_column(String(50), default="yfinance")
     priced_at: Mapped[datetime] = mapped_column(DateTime, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ContributionLimit(Base):
@@ -116,7 +118,7 @@ class Transaction(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reversal_of_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
     contribution_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class TransactionFunding(Base):
@@ -151,7 +153,7 @@ class Import(Base):
     import_type: Mapped[ImportType] = mapped_column(Enum(ImportType), index=True)
     source_filename: Mapped[str] = mapped_column(String(255))
     status: Mapped[ImportStatus] = mapped_column(Enum(ImportStatus), default=ImportStatus.parsed)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ImportRow(Base):
@@ -168,7 +170,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     operation: Mapped[str] = mapped_column(String(20), index=True)
     table_name: Mapped[str] = mapped_column(String(100), index=True)
     row_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
@@ -176,3 +178,16 @@ class AuditLog(Base):
     before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (UniqueConstraint("snapshot_date", "account_id", name="uq_portfolio_snapshots_date_account"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    book_value: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    market_value: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="CAD")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
