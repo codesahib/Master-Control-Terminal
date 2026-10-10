@@ -1,9 +1,9 @@
 import json
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, func, or_, select, text
+from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.db.session import Base
@@ -20,10 +20,16 @@ from app.models.models import (
     TransactionFunding,
     TransactionType,
 )
-from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, TransactionCreate
-from app.services.portfolio import distribution, grouped_holdings, list_holdings, portfolio_pl, portfolio_summary, timeseries
+from app.schemas.schemas import AccountTransactionCreate, ContributionCreate
 
-TRACKED_YEARS = ["2021", "2022", "2023", "2024", "2025", "2026"]
+FIRST_TRACKED_YEAR = 2021
+FHSA_ANNUAL_LIMIT = 8000.0
+FHSA_CARRY_FORWARD_LIMIT = 8000.0
+FHSA_LIFETIME_LIMIT = 40000.0
+BACKUP_FORMAT = "master-control-terminal-export"
+BACKUP_FORMAT_VERSION = 2
+FUNDING_SOURCE_TYPES = {TransactionType.contribution, TransactionType.dividend_interest, TransactionType.transfer}
+CENT = Decimal("0.01")
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
 BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs"}
 # Tables dropped in migration 20261010_0011; older backups still carry them (empty in practice).
@@ -46,6 +52,26 @@ CATEGORY_OPTIONS = {
     "Income": ["Dividend", "Interest"],
     "Other": ["Other"],
 }
+
+
+class ConflictError(ValueError):
+    """The request is valid but clashes with saved data (HTTP 409)."""
+
+
+def _cents(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def tracked_years(db: Session, today: date | None = None) -> list[int]:
+    current_year = (today or date.today()).year
+    first_transaction = db.scalar(select(func.min(Transaction.transaction_date)))
+    first_limit = db.scalar(select(func.min(ContributionLimit.tax_year)))
+    candidates = [current_year]
+    if first_transaction:
+        candidates.append(first_transaction.year)
+    if first_limit:
+        candidates.append(int(first_limit))
+    return list(range(max(FIRST_TRACKED_YEAR, min(candidates)), current_year + 1))
 
 
 def _backup_tables():
@@ -154,7 +180,8 @@ def seed_reference_data(db: Session) -> None:
             select(func.count(Category.id)).scalar_subquery(),
         )
     ).one()
-    if tuple(seed_counts) >= (3, 5, 10, sum(len(options) for options in CATEGORY_OPTIONS.values())):
+    minimum_counts = (3, 5, 10, sum(len(options) for options in CATEGORY_OPTIONS.values()))
+    if all(count >= minimum for count, minimum in zip(seed_counts, minimum_counts)):
         return
 
     for account_name in ["RRSP", "TFSA", "FHSA"]:
@@ -199,31 +226,31 @@ def seed_reference_data(db: Session) -> None:
     db.commit()
 
 
-def seed_contribution_limits(db: Session) -> None:
-    # Seed baseline limits for current years when missing.
+def seed_contribution_limits(db: Session, today: date | None = None) -> None:
+    # Baseline rows for a fresh database, plus the current year's row once a new year starts.
+    current_year = (today or date.today()).year
     seeded = {
         "RRSP": {2024: 16840, 2025: 17324, 2026: 0},
         "FHSA": {2024: 8000, 2025: 8000, 2026: 8000},
         "TFSA": {2024: 7000, 2025: 7000, 2026: 7000},
     }
-    seeded_limit_count = db.scalar(select(func.count(ContributionLimit.id))) or 0
-    if seeded_limit_count >= sum(len(years) for years in seeded.values()):
-        return
-
+    existing = {
+        (account_id, tax_year): new_room
+        for account_id, tax_year, new_room in db.execute(
+            select(ContributionLimit.account_id, ContributionLimit.tax_year, ContributionLimit.new_room)
+        )
+    }
     for account_name, years in seeded.items():
         account = db.scalar(select(Account).where(Account.name == account_name))
         if not account:
             continue
-        for year, new in years.items():
-            tax_year = str(year)
-            existing = db.scalar(
-                select(ContributionLimit).where(
-                    ContributionLimit.account_id == account.id,
-                    ContributionLimit.tax_year == tax_year,
-                )
-            )
-            if not existing:
-                db.add(ContributionLimit(account_id=account.id, tax_year=tax_year, new_room=new))
+        rows = {str(year): new_room for year, new_room in years.items()}
+        if str(current_year) not in rows:
+            previous_tfsa_room = existing.get((account.id, str(current_year - 1)), years.get(current_year - 1, 0))
+            rows[str(current_year)] = {"FHSA": FHSA_ANNUAL_LIMIT, "TFSA": previous_tfsa_room}.get(account_name, 0)
+        for tax_year, new_room in rows.items():
+            if (account.id, tax_year) not in existing:
+                db.add(ContributionLimit(account_id=account.id, tax_year=tax_year, new_room=new_room))
     db.commit()
 
 
@@ -241,23 +268,15 @@ def normalize_platform(db: Session, raw_name: str | None) -> Platform | None:
     db.add(created)
     db.flush()
     db.add(PlatformAlias(alias=normalized, platform_id=created.id))
-    db.commit()
-    db.refresh(created)
+    db.flush()
     return created
 
 
-def get_or_create_account(db: Session, name: str | None) -> Account | None:
-    if not name:
-        return None
-    normalized = name.strip().upper()
-    acc = db.scalar(select(Account).where(func.lower(Account.name) == normalized.lower()))
-    if acc:
-        return acc
-    acc = Account(name=normalized)
-    db.add(acc)
-    db.commit()
-    db.refresh(acc)
-    return acc
+def get_account(db: Session, name: str) -> Account:
+    account = db.scalar(select(Account).where(func.lower(Account.name) == name.strip().lower()))
+    if not account:
+        raise LookupError(f"account {name} was not found")
+    return account
 
 
 def get_or_create_instrument(db: Session, symbol: str | None, name: str | None = None) -> Instrument | None:
@@ -269,8 +288,7 @@ def get_or_create_instrument(db: Session, symbol: str | None, name: str | None =
         return inst
     inst = Instrument(symbol=normalized, name=name, provider_symbol=normalized, provider="yfinance")
     db.add(inst)
-    db.commit()
-    db.refresh(inst)
+    db.flush()
     return inst
 
 
@@ -279,22 +297,19 @@ def get_or_create_custom_instrument(db: Session, symbol: str | None, name: str |
         return None
     value = symbol.strip()
     inst = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == value.lower()))
+    if inst and inst.provider:
+        # A priced instrument owns this symbol; never strip its provider data, use a manual twin instead.
+        value = f"{value} (manual)"
+        inst = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == value.lower()))
     if not inst:
-        inst = Instrument(symbol=value, name=name or value)
+        inst = Instrument(symbol=value, asset_type="manual", is_active=False)
         db.add(inst)
     inst.name = name or inst.name or value
-    inst.provider_symbol = None
-    inst.exchange = None
-    inst.currency = None
-    inst.asset_type = "manual"
-    inst.provider = None
-    inst.is_active = False
-    db.commit()
-    db.refresh(inst)
+    db.flush()
     return inst
 
 
-def resolve_instrument(db: Session, payload: TransactionCreate | AccountTransactionCreate) -> Instrument | None:
+def resolve_instrument(db: Session, payload: AccountTransactionCreate) -> Instrument | None:
     instrument_id = getattr(payload, "instrument_id", None)
     if instrument_id:
         instrument = db.get(Instrument, instrument_id)
@@ -311,7 +326,7 @@ def resolve_instrument(db: Session, payload: TransactionCreate | AccountTransact
 
 
 def upsert_manual_valuation(db: Session, payload) -> HoldingSnapshot:
-    account = get_or_create_account(db, payload.account_name)
+    account = get_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
     instrument = resolve_instrument(db, payload)
     category = get_or_create_category(db, payload.broad_category, payload.precise_category)
@@ -367,19 +382,18 @@ def get_or_create_category(db: Session, broad: str | None, precise: str | None) 
         return category
     category = Category(broad=broad_value, precise=precise_value)
     db.add(category)
-    db.commit()
-    db.refresh(category)
+    db.flush()
     return category
 
 
 def _save_transaction(
     db: Session,
-    payload: TransactionCreate | ContributionCreate | AccountTransactionCreate,
+    payload: ContributionCreate | AccountTransactionCreate,
     txn: Transaction | None = None,
     transaction_type: TransactionType | None = None,
 ) -> Transaction:
     before = _transaction_payload(db, txn) if txn else None
-    account = get_or_create_account(db, payload.account_name)
+    account = get_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
     source_platform = normalize_platform(db, getattr(payload, "source_platform_name", None))
     broad_category = getattr(payload, "broad_category", None)
@@ -417,6 +431,8 @@ def _save_transaction(
     if isinstance(payload, AccountTransactionCreate):
         _replace_transaction_fundings(db, txn, payload)
         db.flush()
+
+    _validate_sell_quantity(db, txn)
     log_audit(
         db,
         "update" if before else "create",
@@ -432,17 +448,6 @@ def _save_transaction(
     return txn
 
 
-def create_transaction(db: Session, payload: TransactionCreate) -> Transaction:
-    return _save_transaction(db, payload)
-
-
-def update_transaction(db: Session, transaction_id: int, payload: TransactionCreate) -> Transaction | None:
-    txn = db.get(Transaction, transaction_id)
-    if not txn:
-        return None
-    return _save_transaction(db, payload, txn=txn)
-
-
 def create_contribution(db: Session, payload: ContributionCreate) -> Transaction:
     return _save_transaction(db, payload, transaction_type=TransactionType.contribution)
 
@@ -451,6 +456,7 @@ def update_contribution(db: Session, transaction_id: int, payload: ContributionC
     txn = db.get(Transaction, transaction_id)
     if not txn or txn.transaction_type != TransactionType.contribution:
         return None
+    _check_funding_source_edit(db, txn, TransactionType.contribution, payload.account_name, payload.amount)
     return _save_transaction(db, payload, txn=txn, transaction_type=TransactionType.contribution)
 
 
@@ -463,8 +469,67 @@ def update_account_transaction(db: Session, transaction_id: int, payload: Accoun
     txn = db.get(Transaction, transaction_id)
     if not txn or txn.transaction_type == TransactionType.contribution:
         return None
+    _check_funding_source_edit(db, txn, payload.transaction_type, payload.account_name, payload.amount)
     _validate_contribution_funding(db, payload, txn)
     return _save_transaction(db, payload, txn=txn)
+
+
+def delete_transaction(db: Session, transaction_id: int, contribution: bool) -> None:
+    txn = db.get(Transaction, transaction_id)
+    if not txn or (txn.transaction_type == TransactionType.contribution) != contribution:
+        raise LookupError("transaction not found")
+    if db.scalar(select(func.count()).select_from(TransactionFunding).where(TransactionFunding.contribution_id == txn.id)):
+        raise ConflictError("other transactions are funded by this entry; edit or delete them first")
+    before = _transaction_payload(db, txn)
+    summary = f"{txn.transaction_type.value} transaction deleted"
+    db.query(TransactionFunding).filter(TransactionFunding.transaction_id == txn.id).delete()
+    db.delete(txn)
+    db.flush()
+    log_audit(db, "delete", "transactions", row_id=transaction_id, summary=summary, before=before, source="transactions")
+    db.commit()
+
+
+def _check_funding_source_edit(
+    db: Session, txn: Transaction, new_type: TransactionType, new_account_name: str, new_amount: float
+) -> None:
+    used = _cents(_contribution_usage(db, txn.id))
+    if not used:
+        return
+    account = db.get(Account, txn.account_id) if txn.account_id else None
+    if new_type not in FUNDING_SOURCE_TYPES or not account or account.name.lower() != new_account_name.strip().lower():
+        raise ConflictError(f"this entry already funds ${used:.2f} of other transactions, so its type and account cannot change")
+    if _cents(new_amount) < used:
+        raise ConflictError(f"this entry already funds ${used:.2f} of other transactions, so its amount cannot go below that")
+
+
+def _validate_sell_quantity(db: Session, txn: Transaction) -> None:
+    if txn.transaction_type != TransactionType.investment_sell or not txn.quantity:
+        return
+    signed_quantity = case(
+        (Transaction.transaction_type == TransactionType.investment_sell, -Transaction.quantity),
+        else_=Transaction.quantity,
+    )
+    held = db.scalar(
+        select(func.coalesce(func.sum(signed_quantity), 0)).where(
+            Transaction.account_id == txn.account_id,
+            Transaction.platform_id == txn.platform_id,
+            Transaction.instrument_id == txn.instrument_id,
+            Transaction.transaction_type.in_(
+                [
+                    TransactionType.investment_buy,
+                    TransactionType.dividend_reinvestment,
+                    TransactionType.quantity_adjustment,
+                    TransactionType.investment_sell,
+                ]
+            ),
+            Transaction.quantity.is_not(None),
+            Transaction.transaction_date <= txn.transaction_date,
+            Transaction.id != txn.id,
+        )
+    )
+    # ponytail: tolerance absorbs float quantities until the column is exact numeric.
+    if float(txn.quantity) > float(held or 0) + 1e-9:
+        raise ValueError(f"cannot sell {float(txn.quantity):g} units: only {float(held or 0):g} held on {txn.transaction_date}")
 
 
 def _funding_contributions(
@@ -474,20 +539,20 @@ def _funding_contributions(
         sources = _available_funding_transactions(db, payload.account_name, transaction)
         allocations = []
         for cash_source in payload.funding_cash_sources:
-            remaining_to_allocate = float(cash_source.amount)
+            remaining_to_allocate = _cents(cash_source.amount)
             platform_sources = [
                 source
                 for source in sources
                 if source["platform_name"].lower() == cash_source.platform_name.lower()
             ]
-            available = round(sum(source["remaining_amount"] for source in platform_sources), 2)
-            if round(remaining_to_allocate, 2) > available:
+            available = sum((_cents(source["remaining_amount"]) for source in platform_sources), Decimal("0"))
+            if remaining_to_allocate > available:
                 raise ValueError(f"{cash_source.platform_name} cash has only ${available:.2f} remaining")
             for source in platform_sources:
-                amount = min(remaining_to_allocate, source["remaining_amount"])
+                amount = min(remaining_to_allocate, _cents(source["remaining_amount"]))
                 if amount:
-                    allocations.append({"contribution_id": source["id"], "amount": amount})
-                    remaining_to_allocate = round(remaining_to_allocate - amount, 2)
+                    allocations.append({"contribution_id": source["id"], "amount": float(amount)})
+                    remaining_to_allocate -= amount
                 if not remaining_to_allocate:
                     break
         return allocations
@@ -534,9 +599,9 @@ def _validate_contribution_funding(
 
     if not fundings:
         return
-    funding_total = sum(float(funding.amount if hasattr(funding, "amount") else funding["amount"]) for funding in fundings)
-    transaction_total = (payload.source_amount if payload.source_amount is not None else payload.amount) + (payload.fees or 0)
-    if round(funding_total, 2) != round(transaction_total, 2):
+    funding_total = _cents(sum(Decimal(str(funding.amount if hasattr(funding, "amount") else funding["amount"])) for funding in fundings))
+    cash_amount = payload.source_amount if payload.source_amount is not None else payload.amount
+    if funding_total != _cents(Decimal(str(cash_amount)) + Decimal(str(payload.fees or 0))):
         raise ValueError("funding contributions must total the transaction amount plus fees")
 
     for funding in fundings:
@@ -557,8 +622,8 @@ def _validate_contribution_funding(
             funding_platform = db.get(Platform, contribution.platform_id) if contribution.platform_id else None
             if not funding_platform or funding_platform.canonical_name.lower() != payload.source_platform_name.lower():
                 raise ValueError("transfer funding sources must belong to the source platform")
-        remaining = float(contribution.amount) - _contribution_usage(db, contribution.id, transaction)
-        if round(amount, 2) > round(remaining, 2):
+        remaining = _cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction))
+        if _cents(amount) > remaining:
             raise ValueError(f"selected funding source has only ${remaining:.2f} remaining")
 
 
@@ -603,7 +668,7 @@ def _available_funding_transactions(
     ).all()
     available = []
     for contribution, platform_name in contributions:
-        remaining = round(float(contribution.amount) - _contribution_usage(db, contribution.id, transaction), 2)
+        remaining = float(_cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction)))
         if remaining <= 0:
             continue
         available.append(
@@ -618,7 +683,7 @@ def _available_funding_transactions(
 
 
 def list_transactions(
-    db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None, page=1, sort_direction="desc"
+    db: Session, transaction_type=None, account=None, platform=None, symbol=None, year=None, page=1, sort_direction="desc", page_size=10
 ):
     q = (
         select(
@@ -644,10 +709,14 @@ def list_transactions(
         q = q.where(func.lower(Instrument.symbol) == symbol.lower())
     if year:
         q = q.where(func.extract("year", Transaction.transaction_date) == year)
+    return _page(db, q, page, page_size, sort_direction)
+
+
+def _page(db: Session, q, page: int, page_size: int, sort_direction: str):
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     order = Transaction.transaction_date.asc() if sort_direction == "asc" else Transaction.transaction_date.desc()
     id_order = Transaction.id.asc() if sort_direction == "asc" else Transaction.id.desc()
-    return db.execute(q.order_by(order, id_order).offset((page - 1) * 10).limit(10)).all(), total
+    return db.execute(q.order_by(order, id_order).offset((page - 1) * page_size).limit(page_size)).all(), total
 
 
 def _rrsp_contribution_deadline(tax_year: int):
@@ -709,7 +778,7 @@ def list_contributions(db: Session, account=None, platform=None, year=None):
 
 
 def list_account_transactions(
-    db: Session, account=None, platform=None, symbol=None, year=None, transaction_type=None, page=1, sort_direction="desc"
+    db: Session, account=None, platform=None, symbol=None, year=None, transaction_type=None, page=1, sort_direction="desc", page_size=10
 ):
     q = (
         select(
@@ -733,116 +802,116 @@ def list_account_transactions(
     if symbol:
         q = q.where(func.lower(Instrument.symbol) == symbol.lower())
     if year:
-        q = q.where(_rrsp_tax_year_filter(year))
+        # Activity lists use calendar years; RRSP tax-year bounds apply only to contribution room and the contribution list.
+        q = q.where(func.extract("year", Transaction.transaction_date) == year)
     if transaction_type:
         q = q.where(Transaction.transaction_type == transaction_type)
-    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    order = Transaction.transaction_date.asc() if sort_direction == "asc" else Transaction.transaction_date.desc()
-    id_order = Transaction.id.asc() if sort_direction == "asc" else Transaction.id.desc()
-    return db.execute(q.order_by(order, id_order).offset((page - 1) * 10).limit(10)).all(), total
+    return _page(db, q, page, page_size, sort_direction)
+
+
+def _contribution_tax_year(account_name: str | None, transaction_date: date) -> int:
+    year = transaction_date.year
+    if account_name and account_name.lower() == "rrsp" and transaction_date <= _rrsp_contribution_deadline(year - 1):
+        return year - 1
+    return year
+
+
+def _room_ledger(db: Session):
+    new_rooms = {
+        (account_id, int(tax_year)): float(new_room)
+        for account_id, tax_year, new_room in db.execute(
+            select(ContributionLimit.account_id, ContributionLimit.tax_year, ContributionLimit.new_room)
+        )
+    }
+    used = {}
+    withdrawn = {}
+    rows = db.execute(
+        select(Transaction.account_id, Account.name, Transaction.transaction_type, Transaction.transaction_date, Transaction.amount)
+        .join(Account, Transaction.account_id == Account.id)
+        .where(Transaction.transaction_type.in_([TransactionType.contribution, TransactionType.withdrawal]))
+    )
+    for account_id, account_name, transaction_type, transaction_date, amount in rows:
+        if transaction_type == TransactionType.contribution:
+            key = (account_id, _contribution_tax_year(account_name, transaction_date))
+            used[key] = used.get(key, 0.0) + float(amount)
+        else:
+            key = (account_id, transaction_date.year)
+            withdrawn[key] = withdrawn.get(key, 0.0) + float(amount)
+    return new_rooms, used, withdrawn
+
+
+def _account_room_rows(account: Account, years: list[int], ledger) -> list[dict]:
+    new_rooms, used, withdrawn = ledger
+    kind = account.name.upper()
+    rows = []
+    previous = None
+    contributed_before = 0.0
+    for year in years:
+        new_room = new_rooms.get((account.id, year), 0.0)
+        unused_room = previous["total_room"] - previous["used"] if previous else 0.0
+        if kind == "FHSA":
+            # CRA: unused FHSA room carries forward at most $8,000, and room never exceeds the $40,000 lifetime limit.
+            unused_room = min(max(unused_room, 0.0), FHSA_CARRY_FORWARD_LIMIT)
+            total_room = min(unused_room + new_room, max(FHSA_LIFETIME_LIMIT - contributed_before, 0.0))
+        else:
+            if kind == "TFSA":
+                # CRA: TFSA withdrawals are added back as room at the start of the next year.
+                unused_room += withdrawn.get((account.id, year - 1), 0.0)
+            total_room = unused_room + new_room
+        year_used = used.get((account.id, year), 0.0)
+        previous = {
+            "account": account.name,
+            "tax_year": str(year),
+            "unused_room": unused_room,
+            "new_room": new_room,
+            "total_room": total_room,
+            "used": year_used,
+            "remaining": total_room - year_used,
+        }
+        rows.append(previous)
+        contributed_before += year_used
+    return rows
 
 
 def get_contribution_room(db: Session, tax_year: int):
+    years = tracked_years(db)
+    if tax_year not in years:
+        return []
+    ledger = _room_ledger(db)
     result = []
-    accounts = db.scalars(select(Account)).all()
-    for acc in accounts:
-        limit = compute_contribution_limit_for_account(db, acc, str(tax_year))
-        if not limit:
-            continue
-        used = get_contribution_used(db, acc.id, tax_year)
-        result.append(
-            {
-                "account": acc.name,
-                "tax_year": str(tax_year),
-                "total_room": limit["total_room"],
-                "used": used,
-                "remaining": limit["total_room"] - used,
-            }
-        )
+    for account in db.scalars(select(Account).order_by(Account.name)):
+        row = next(row for row in _account_room_rows(account, years, ledger) if row["tax_year"] == str(tax_year))
+        result.append({key: row[key] for key in ("account", "tax_year", "total_room", "used", "remaining")})
     return result
 
 
 def get_all_contribution_room(db: Session):
+    years = tracked_years(db)
+    ledger = _room_ledger(db)
     result = []
-    for account in db.scalars(select(Account)).all():
-        limits = compute_contribution_limits_for_account(db, account)
-        total_room = sum(limit["new_room"] for limit in limits)
-        used = sum(get_contribution_used(db, account.id, int(limit["tax_year"])) for limit in limits)
-        result.append(
-            {
-                "account": account.name,
-                "tax_year": "All",
-                "total_room": total_room,
-                "used": used,
-                "remaining": total_room - used,
-            }
-        )
+    for account in db.scalars(select(Account).order_by(Account.name)):
+        rows = _account_room_rows(account, years, ledger)
+        used = sum(row["used"] for row in rows)
+        remaining = rows[-1]["remaining"]
+        result.append({"account": account.name, "tax_year": "All", "total_room": remaining + used, "used": used, "remaining": remaining})
     return result
 
 
 def get_contribution_used(db: Session, account_id: int, tax_year: int):
-    account = db.get(Account, account_id)
-    tax_year_start, next_tax_year_start = _contribution_tax_year_bounds(account.name if account else None, tax_year)
-    return float(
-        db.scalar(
-            select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                Transaction.account_id == account_id,
-                Transaction.transaction_type == TransactionType.contribution,
-                Transaction.transaction_date >= tax_year_start,
-                Transaction.transaction_date < next_tax_year_start,
-            )
-        )
-        or 0
-    )
-
-
-def get_new_room(db: Session, account_id: int, tax_year: str):
-    limit = db.scalar(
-        select(ContributionLimit).where(
-            ContributionLimit.account_id == account_id,
-            ContributionLimit.tax_year == tax_year,
-        )
-    )
-    return float(limit.new_room) if limit else 0
-
-
-def compute_contribution_limits_for_account(db: Session, account: Account):
-    rows = []
-    previous_total = 0.0
-    for tax_year in TRACKED_YEARS:
-        previous_year = int(tax_year) - 1
-        previous_used = get_contribution_used(db, account.id, previous_year) if rows else 0.0
-        unused_room = previous_total - previous_used if rows else 0.0
-        new_room = get_new_room(db, account.id, tax_year)
-        total_room = unused_room + new_room
-        rows.append(
-            {
-                "account": account.name,
-                "tax_year": tax_year,
-                "unused_room": unused_room,
-                "new_room": new_room,
-                "total_room": total_room,
-            }
-        )
-        previous_total = total_room
-    return rows
-
-
-def compute_contribution_limit_for_account(db: Session, account: Account, tax_year: str):
-    rows = compute_contribution_limits_for_account(db, account)
-    return next((row for row in rows if row["tax_year"] == tax_year), None)
+    return _room_ledger(db)[1].get((account_id, tax_year), 0.0)
 
 
 def list_contribution_limits(db: Session):
-    accounts = db.scalars(select(Account).order_by(Account.name)).all()
+    years = tracked_years(db)
+    ledger = _room_ledger(db)
     rows = []
-    for acc in accounts:
-        rows.extend(compute_contribution_limits_for_account(db, acc))
+    for account in db.scalars(select(Account).order_by(Account.name)):
+        rows.extend(_account_room_rows(account, years, ledger))
     return rows
 
 
 def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new_room: float):
-    account = get_or_create_account(db, account_name)
+    account = get_account(db, account_name)
     limit = db.scalar(
         select(ContributionLimit).where(
             ContributionLimit.account_id == account.id,
@@ -867,7 +936,8 @@ def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new
         source="contribution-limits",
     )
     db.commit()
-    return compute_contribution_limit_for_account(db, account, tax_year)
+    years = sorted(set(tracked_years(db)) | {int(tax_year)})
+    return next(row for row in _account_room_rows(account, years, _room_ledger(db)) if row["tax_year"] == tax_year)
 
 
 def export_all_data(db: Session):

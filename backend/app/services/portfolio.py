@@ -1,26 +1,108 @@
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.time import as_utc, utcnow
-from app.models.models import Account, Category, HoldingSnapshot, Instrument, Platform, Transaction, TransactionType
-from app.services.market_data import fetch_usd_cad_rate, latest_prices
+from app.models.models import (
+    Account,
+    Category,
+    HoldingSnapshot,
+    Instrument,
+    MarketPrice,
+    Platform,
+    PortfolioSnapshot,
+    Transaction,
+    TransactionType,
+)
+from app.services.market_data import latest_fx_rate, latest_prices
+
+PRICED_STATUSES = {"ok", "stale"}
+QUANTITY_EPSILON = 1e-8
+TIMESERIES_FIELDS = {
+    TransactionType.contribution: ("contributions", 1),
+    TransactionType.investment_buy: ("investments", 1),
+    TransactionType.dividend_reinvestment: ("investments", 1),
+    TransactionType.investment_sell: ("investments", -1),
+    TransactionType.withdrawal: ("withdrawals", 1),
+    TransactionType.dividend_interest: ("dividends", 1),
+}
 
 
 def portfolio_summary(db: Session, year=None):
-    rows = portfolio_pl(db, year=year)
-    leaf_rows = [leaf for row in rows for leaf in (row["children"] or [row])]
-    account_names = list(db.scalars(select(Account.name).order_by(Account.name)))
+    return _summary(_portfolio_pl_rows(db, year=year), _account_names(db))
 
-    allocation = {}
-    for row in rows:
-        value = row.get("market_value_reporting") or row.get("book_value_reporting") or row.get("market_value") or row["book_value"]
-        if not value:
+
+def portfolio_overview(db: Session, year=None, category_level: str = "precise"):
+    rows = _portfolio_pl_rows(db, year=year)
+    summary = _summary(rows, _account_names(db))
+    converted = [row for row in rows if row["book_value_reporting"] is not None]
+    priced = [row for row in converted if row["record_type"] != "cash" and row["price_status"] in PRICED_STATUSES]
+    priced_book = sum(row["book_value_reporting"] for row in priced)
+    unrealized_pl = sum(row["unrealized_pl_reporting"] or 0 for row in priced)
+    return {
+        "totals": {
+            "book_value": round(sum(row["book_value_reporting"] for row in converted), 2),
+            "market_value": round(sum(_reporting_value(row) for row in converted), 2),
+            "unrealized_pl": round(unrealized_pl, 2),
+            "unrealized_pl_pct": round(unrealized_pl / priced_book * 100, 2) if priced_book else None,
+            "investable_cash": round(sum(row["book_value_reporting"] or 0 for row in summary["investable_cash"]), 2),
+        },
+        "summary": summary,
+        "distribution": {
+            group_by: _allocation(rows, _label(group_by, category_level)) for group_by in ("sector", "account", "platform")
+        },
+        "health": _health(db, rows),
+    }
+
+
+def portfolio_health(db: Session, year=None):
+    return _health(db, _portfolio_pl_rows(db, year=year))
+
+
+def portfolio_history(db: Session, days: int = 365):
+    since = utcnow().date() - timedelta(days=days)
+    rows = db.execute(
+        select(PortfolioSnapshot.snapshot_date, func.sum(PortfolioSnapshot.book_value), func.sum(PortfolioSnapshot.market_value))
+        .where(PortfolioSnapshot.snapshot_date >= since)
+        .group_by(PortfolioSnapshot.snapshot_date)
+        .order_by(PortfolioSnapshot.snapshot_date)
+    ).all()
+    return [{"date": day, "book_value": float(book or 0), "market_value": float(market or 0)} for day, book, market in rows]
+
+
+def record_portfolio_snapshots(db: Session) -> None:
+    """Upsert today's CAD book/market totals per account. Called after every price refresh."""
+    today = utcnow().date()
+    totals = {}
+    for row in _portfolio_pl_rows(db):
+        if row["book_value_reporting"] is None:
             continue
-        label = row.get("precise_category") or row.get("broad_category") or "Uncategorized"
-        allocation[label] = allocation.get(label, 0.0) + float(value)
+        account_totals = totals.setdefault(row["account_id"], [0.0, 0.0])
+        account_totals[0] += row["book_value_reporting"]
+        account_totals[1] += _reporting_value(row)
+    for account_id, (book_value, market_value) in totals.items():
+        snapshot = db.scalar(
+            select(PortfolioSnapshot).where(PortfolioSnapshot.snapshot_date == today, PortfolioSnapshot.account_id == account_id)
+        )
+        if not snapshot:
+            snapshot = PortfolioSnapshot(snapshot_date=today, account_id=account_id, currency="CAD")
+            db.add(snapshot)
+        snapshot.book_value = round(book_value, 2)
+        snapshot.market_value = round(market_value, 2)
+    db.commit()
 
+
+def _account_names(db: Session):
+    return list(db.scalars(select(Account.name).order_by(Account.name)))
+
+
+def _reporting_value(row: dict):
+    """CAD market value, falling back to CAD book value when the row has no price."""
+    return row["market_value_reporting"] if row["market_value_reporting"] is not None else row["book_value_reporting"]
+
+
+def _summary(rows: list[dict], account_names: list[str]):
     account_pl = []
     for account_name in account_names:
         totals = {
@@ -31,8 +113,8 @@ def portfolio_summary(db: Session, year=None):
             "marketReporting": 0.0,
             "plReporting": 0.0,
         }
-        for row in leaf_rows:
-            if row["account_name"] != account_name or row["price_status"] != "ok":
+        for row in rows:
+            if row["account_name"] != account_name or row["price_status"] not in PRICED_STATUSES:
                 continue
             totals["book"] += float(row["book_value"])
             totals["market"] += float(row.get("market_value") or 0)
@@ -50,9 +132,68 @@ def portfolio_summary(db: Session, year=None):
 
     return {
         "investable_cash": [row for row in rows if row["record_type"] == "cash" and row["book_value"] > 0],
-        "allocation": [{"label": label, "value": value} for label, value in sorted(allocation.items(), key=lambda item: item[1], reverse=True)],
+        "allocation": _allocation(rows, _label("sector")),
         "account_pl": account_pl,
     }
+
+
+def _label(group_by: str, category_level: str = "precise"):
+    if group_by == "sector":
+        if category_level == "broad":
+            return lambda row: row.get("broad_category")
+        return lambda row: row.get("precise_category") or row.get("broad_category")
+    key = "account_name" if group_by == "account" else "platform_name"
+    return lambda row: row.get(key)
+
+
+def _allocation(rows: list[dict], label_of, currency: str = "CAD", usd_cad_rate: float | None = None):
+    """Allocation by label: CAD market value (book when unpriced), optionally shown in USD."""
+    totals = {}
+    for row in rows:
+        value = _from_cad(_reporting_value(row), currency, usd_cad_rate)
+        if value is None:
+            continue  # no FX rate: counted in health.fx_missing
+        label = label_of(row) or "Uncategorized"
+        totals[label] = totals.get(label, 0.0) + value
+    return [
+        {"label": label, "value": round(value, 2)}
+        for label, value in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+        if round(value, 2) > 0
+    ]
+
+
+def _health(db: Session, rows: list[dict]):
+    holdings = [row for row in rows if row["record_type"] != "cash"]
+    cash_rows = [row for row in rows if row["record_type"] == "cash"]
+
+    def cash(row):
+        return {
+            "account_name": row["account_name"],
+            "platform_name": row["platform_name"],
+            "currency": row["currency"],
+            "amount": row["book_value"],
+        }
+
+    return {
+        "missing_price": sum(row["price_status"] in {"missing", "currency_mismatch"} for row in holdings),
+        "missing_quantity": sum(row["price_status"] == "missing_quantity" for row in holdings),
+        "stale": sum(row["price_status"] == "stale" for row in holdings),
+        "fx_missing": sum(bool(row.get("fx_missing")) for row in rows),
+        "negative_cash": [cash(row) for row in cash_rows if row["book_value"] < 0],
+        "idle_cash": [cash(row) for row in cash_rows if row["book_value"] > 0],
+        "prices_updated_at": db.scalar(select(func.max(MarketPrice.priced_at))),
+    }
+
+
+def sort_pl_rows(rows: list[dict], sort_by: str = "symbol", sort_direction: str = "desc"):
+    reverse = sort_direction == "desc"
+    if sort_by == "symbol":
+        return sorted(rows, key=lambda row: row["symbol"].lower(), reverse=reverse)
+    # Cross-currency comparisons use the CAD reporting values; rows without a value go last.
+    field = {"market_value": "market_value_reporting", "unrealized_pl": "unrealized_pl_reporting"}.get(sort_by, sort_by)
+    present = [row for row in rows if row.get(field) is not None]
+    missing = [row for row in rows if row.get(field) is None]
+    return sorted(present, key=lambda row: row[field], reverse=reverse) + missing
 
 
 def list_holdings(db: Session, account=None, year=None):
@@ -107,6 +248,10 @@ def list_holdings(db: Session, account=None, year=None):
 
         if txn.transaction_type == TransactionType.contribution:
             adjust_cash(account_row, platform, currency, float(txn.amount))
+            continue
+        if txn.transaction_type == TransactionType.withdrawal:
+            adjust_cash(account_row, platform, currency, -float(txn.amount))
+            adjust_cash(account_row, platform, fee_currency, -fees)
             continue
         if txn.transaction_type == TransactionType.dividend_interest:
             adjust_cash(account_row, platform, currency, float(txn.amount))
@@ -166,22 +311,24 @@ def list_holdings(db: Session, account=None, year=None):
             position["broad_category"] = category.broad
             position["precise_category"] = category.precise
 
+        # Quantities are rounded to the DB scale (8 dp) so float drift never leaves ghost holdings.
         if txn.transaction_type in {TransactionType.investment_buy, TransactionType.dividend_reinvestment}:
             position["book_value"] += amount + fees
             if txn.quantity is not None:
-                position["quantity"] += txn.quantity
+                position["quantity"] = round(position["quantity"] + txn.quantity, 8)
                 position["has_quantity"] = True
             continue
 
         if txn.transaction_type == TransactionType.quantity_adjustment:
             if txn.quantity is not None:
-                position["quantity"] += txn.quantity
+                position["quantity"] = round(position["quantity"] + txn.quantity, 8)
                 position["has_quantity"] = True
             continue
 
         if txn.quantity is not None and position["quantity"]:
-            position["book_value"] -= position["book_value"] * (txn.quantity / position["quantity"])
-            position["quantity"] -= txn.quantity
+            sold_share = min(txn.quantity / position["quantity"], 1.0)
+            position["book_value"] -= position["book_value"] * sold_share
+            position["quantity"] = round(position["quantity"] - txn.quantity, 8)
             position["has_quantity"] = True
         else:
             position["book_value"] -= amount
@@ -210,7 +357,8 @@ def list_holdings(db: Session, account=None, year=None):
                 }
             )
     for (account_id, platform_id, instrument_id, currency), row in positions.items():
-        if row["quantity"] or row["book_value"]:
+        quantity = row["quantity"] if abs(row["quantity"]) >= QUANTITY_EPSILON else 0.0
+        if quantity or abs(row["book_value"]) >= 0.005:
             holdings.append(
                 {
                     "id": f"holding:{account_id}:{platform_id or 0}:{instrument_id or 0}:{currency}",
@@ -227,7 +375,7 @@ def list_holdings(db: Session, account=None, year=None):
                     "broad_category": row["broad_category"],
                     "precise_category": row["precise_category"],
                     "record_type": "holding",
-                    "quantity": row["quantity"] if row["has_quantity"] else None,
+                    "quantity": quantity if row["has_quantity"] else None,
                     "book_value": row["book_value"],
                     "currency": row["currency"],
                 }
@@ -295,7 +443,8 @@ def portfolio_pl(db: Session, account=None, year=None, platform=None, status=Non
 def _portfolio_pl_rows(db: Session, account=None, year=None):
     prices = latest_prices(db)
     manual_values = _latest_manual_values(db)
-    usd_cad_rate = _usd_cad_rate()
+    usd_cad_rate = latest_fx_rate(db)
+    stale_before = utcnow() - timedelta(hours=24)
     rows = []
     for holding in list_holdings(db, account=account, year=year):
         row = dict(holding)
@@ -345,17 +494,10 @@ def _portfolio_pl_rows(db: Session, account=None, year=None):
             row["market_value"] = market_value
             row["unrealized_pl"] = unrealized_pl
             row["unrealized_pl_pct"] = round(unrealized_pl / float(row["book_value"]) * 100, 2) if row["book_value"] else None
-            row["price_status"] = "stale" if as_utc(price.priced_at) < utcnow() - timedelta(hours=24) else "ok"
+            row["price_status"] = "stale" if as_utc(price.priced_at) < stale_before else "ok"
         _add_reporting_values(row, usd_cad_rate)
         rows.append(row)
     return rows
-
-
-def _usd_cad_rate():
-    try:
-        return fetch_usd_cad_rate()
-    except Exception:
-        return None
 
 
 def _to_cad(value, currency: str | None, usd_cad_rate: float | None):
@@ -368,12 +510,22 @@ def _to_cad(value, currency: str | None, usd_cad_rate: float | None):
     return None
 
 
+def _from_cad(value, currency: str, usd_cad_rate: float | None):
+    if value is None or currency == "CAD":
+        return value
+    if currency == "USD" and usd_cad_rate:
+        return value / usd_cad_rate
+    return None
+
+
 def _add_reporting_values(row: dict, usd_cad_rate: float | None):
     row["reporting_currency"] = "CAD"
     row["fx_rate_to_reporting"] = 1.0 if row["currency"] == "CAD" else (usd_cad_rate if row["currency"] == "USD" else None)
     row["book_value_reporting"] = _to_cad(row.get("book_value"), row.get("currency"), usd_cad_rate)
     row["market_value_reporting"] = _to_cad(row.get("market_value"), row.get("currency"), usd_cad_rate)
     row["unrealized_pl_reporting"] = _to_cad(row.get("unrealized_pl"), row.get("currency"), usd_cad_rate)
+    # No rate stored yet (refresh prices) or unsupported currency: totals skip the row, health reports it.
+    row["fx_missing"] = row["book_value_reporting"] is None
 
 
 def _latest_manual_values(db: Session):
@@ -441,41 +593,27 @@ def _group_pl_rows(rows: list[dict]):
 
 
 def distribution(db: Session, group_by: str, year: int | None = None, category_level: str = "precise", currency: str = "CAD"):
-    totals = {}
-    for holding in list_holdings(db, year=year):
-        if holding["currency"] != currency:
-            continue
-        if group_by == "sector":
-            label = holding["broad_category"] if category_level == "broad" else holding["precise_category"]
-        elif group_by == "account":
-            label = holding["account_name"]
-        else:
-            label = holding["platform_name"]
-        label = label or "Uncategorized"
-        totals[label] = totals.get(label, 0.0) + holding["book_value"]
-    return [{"label": label, "value": value} for label, value in sorted(totals.items())]
+    return _allocation(_portfolio_pl_rows(db, year=year), _label(group_by, category_level), currency, latest_fx_rate(db))
 
 
 def timeseries(db: Session, year: int | None = None, currency: str = "CAD"):
-    q = (
-        select(
-            func.to_char(Transaction.transaction_date, "YYYY-MM").label("month"),
-            func.coalesce(func.sum(case((Transaction.transaction_type == TransactionType.contribution, Transaction.amount), else_=0)), 0).label("contributions"),
-            func.coalesce(
-                func.sum(
-                    case(
-                        (Transaction.transaction_type.in_([TransactionType.investment_buy, TransactionType.investment_sell]), Transaction.amount),
-                        else_=0,
-                    )
-                ),
-                0,
-            ).label("investments"),
-        )
-        .group_by("month")
-        .order_by("month")
-    )
+    # ponytail: converts every month at the latest stored USD/CAD rate; store historical FX if exact history matters.
+    usd_cad_rate = latest_fx_rate(db)
+    q = select(Transaction.transaction_date, Transaction.transaction_type, Transaction.amount, Transaction.currency)
     if year:
-        q = q.where(func.extract("year", Transaction.transaction_date) == year)
-    q = q.where(Transaction.currency == currency)
-    rows = db.execute(q).all()
-    return [{"month": r.month, "contributions": float(r.contributions or 0), "investments": float(r.investments or 0)} for r in rows]
+        q = q.where(Transaction.transaction_date >= date(year, 1, 1), Transaction.transaction_date < date(year + 1, 1, 1))
+    months = {}
+    for transaction_date, transaction_type, amount, transaction_currency in db.execute(q):
+        if transaction_type not in TIMESERIES_FIELDS:
+            continue
+        value = _from_cad(_to_cad(amount, transaction_currency or "CAD", usd_cad_rate), currency, usd_cad_rate)
+        if value is None:
+            continue
+        field, sign = TIMESERIES_FIELDS[transaction_type]
+        month = f"{transaction_date:%Y-%m}"
+        totals = months.setdefault(month, {"month": month, "contributions": 0.0, "investments": 0.0, "withdrawals": 0.0, "dividends": 0.0})
+        totals[field] += sign * value
+    return [
+        {key: round(value, 2) if isinstance(value, float) else value for key, value in months[month].items()}
+        for month in sorted(months)
+    ]

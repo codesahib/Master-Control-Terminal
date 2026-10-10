@@ -41,7 +41,8 @@ def test_contribution_room_calculation():
         assert all_room["remaining"] == 12500
 
         limits = [row for row in list_contribution_limits(db) if row["account"] == "TFSA"]
-        assert [row["tax_year"] for row in limits] == ["2021", "2022", "2023", "2024", "2025", "2026"]
+        # Years start at the first year with data (2025 here) and run through the current year.
+        assert [row["tax_year"] for row in limits][:2] == ["2025", "2026"]
         limit_2026 = next(row for row in limits if row["tax_year"] == "2026")
         assert limit_2026["unused_room"] == 5500
         assert limit_2026["total_room"] == 12500
