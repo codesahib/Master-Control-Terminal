@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import APIKeyHeader
 
 from app.api.routes import router as api_router
@@ -48,6 +49,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Token", "X-Requested-With"],
     expose_headers=["Content-Disposition"],
 )
+# Added last so it runs first: blocks DNS-rebinding pages (Host: evil.example resolving to 127.0.0.1).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
 
 @app.get("/health")

@@ -70,11 +70,17 @@ def load_cors_origins(environ: Mapping[str, str] = os.environ) -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def load_allowed_hosts(environ: Mapping[str, str] = os.environ) -> list[str]:
+    raw = environ.get("ALLOWED_HOSTS") or "localhost,127.0.0.1"
+    return [host.strip() for host in raw.split(",") if host.strip()]
+
+
 class Settings(BaseModel):
     app_name: str = "Master Terminal API"
     database_url: str = load_database_url()
     api_token: str | None = load_api_token()
     cors_origins: list[str] = load_cors_origins()
+    allowed_hosts: list[str] = load_allowed_hosts()
 
 
 settings = Settings()

@@ -229,7 +229,7 @@ def test_sort_pl_rows_by_market_value_puts_unpriced_rows_last():
 
 def _client(db):
     app.dependency_overrides[get_db] = lambda: db
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost")
 
 
 def test_portfolio_endpoints_respond_and_symbol_conflict_is_409():
