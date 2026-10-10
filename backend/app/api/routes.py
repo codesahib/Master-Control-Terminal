@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -31,8 +31,6 @@ from app.schemas.schemas import (
     PaginatedTransactionRead,
     PaginatedPortfolioPLRead,
     PortfolioSummaryRead,
-    SymbolRead,
-    TimeSeriesPoint,
     TransactionCreate,
     TransactionRead,
 )
@@ -55,7 +53,8 @@ from app.services.finance import (
     update_transaction,
 )
 from app.services.market_data import refresh_market_prices, search_symbols
-from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, timeseries
+from app.schemas.portfolio import SymbolCandidateRead, TimeSeriesRead
+from app.services.portfolio import distribution, grouped_holdings, portfolio_pl, portfolio_summary, record_portfolio_snapshots, sort_pl_rows, timeseries
 from app.services.transaction_reads import (
     account_transaction_reads,
     contribution_read,
@@ -77,7 +76,7 @@ def list_platforms(db: Session = Depends(get_db)):
     return list(db.scalars(select(Platform.canonical_name).order_by(Platform.canonical_name)))
 
 
-@router.get("/symbols/search", response_model=list[SymbolRead])
+@router.get("/symbols/search", response_model=list[SymbolCandidateRead])
 def search_symbols_endpoint(
     q: str = Query(min_length=1),
     limit: int = Query(default=8, ge=1, le=20),
@@ -88,7 +87,9 @@ def search_symbols_endpoint(
 
 @router.post("/market-prices/refresh", response_model=list[MarketPriceRefreshResult])
 def refresh_market_prices_endpoint(db: Session = Depends(get_db)):
-    return refresh_market_prices(db)
+    results = refresh_market_prices(db)
+    record_portfolio_snapshots(db)
+    return results
 
 
 @router.post("/manual-valuations")
@@ -114,10 +115,11 @@ def portfolio_pl_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=500),
     sort_direction: Literal["asc", "desc"] = Query(default="desc"),
+    sort_by: Annotated[Literal["symbol", "market_value", "unrealized_pl", "unrealized_pl_pct"], Query()] = "symbol",
     db: Session = Depends(get_db),
 ):
     rows = portfolio_pl(db, account=account, platform=platform, status=status, year=year)
-    rows = sorted(rows, key=lambda row: row["symbol"].lower(), reverse=sort_direction == "desc")
+    rows = sort_pl_rows(rows, sort_by, sort_direction)
     total = len(rows)
     start = (page - 1) * page_size
     return PaginatedPortfolioPLRead(items=rows[start:start + page_size], total=total, page=page, page_size=page_size)
@@ -300,7 +302,7 @@ def get_distribution(
     return distribution(db, group_by, year, category_level, currency)
 
 
-@router.get("/analytics/timeseries", response_model=list[TimeSeriesPoint])
+@router.get("/analytics/timeseries", response_model=list[TimeSeriesRead])
 def get_timeseries(
     year: int | None = Query(default=None),
     currency: str = Query(default="CAD", pattern="^[A-Z]{3}$"),
@@ -407,3 +409,8 @@ async def import_holdings(file: UploadFile = File(...), db: Session = Depends(ge
         rows=[ImportPreviewRow(row_number=i + 1, payload=row) for i, row in enumerate(rows[:250])],
         row_count=len(rows),
     )
+
+
+from app.api.portfolio_routes import router as portfolio_router  # noqa: E402
+
+router.include_router(portfolio_router)
