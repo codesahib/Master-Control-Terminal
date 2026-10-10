@@ -233,27 +233,28 @@ def seed_reference_data(db: Session) -> None:
 
 
 def seed_contribution_limits(db: Session, today: date | None = None) -> None:
-    # Baseline rows for a fresh database, plus the current year's row once a new year starts.
+    # Baseline rows only for an empty table; afterwards each account rolls into the new year
+    # once it has a row for the previous year (accounts opened later never get fake room).
     current_year = (today or date.today()).year
-    seeded = {
-        "RRSP": {2024: 16840, 2025: 17324, 2026: 0},
-        "FHSA": {2024: 8000, 2025: 8000, 2026: 8000},
-        "TFSA": {2024: 7000, 2025: 7000, 2026: 7000},
-    }
     existing = {
         (account_id, tax_year): new_room
         for account_id, tax_year, new_room in db.execute(
             select(ContributionLimit.account_id, ContributionLimit.tax_year, ContributionLimit.new_room)
         )
     }
-    for account_name, years in seeded.items():
+    baseline = {} if existing else {
+        "RRSP": {2024: 16840, 2025: 17324, 2026: 0},
+        "FHSA": {2024: 8000, 2025: 8000, 2026: 8000},
+        "TFSA": {2024: 7000, 2025: 7000, 2026: 7000},
+    }
+    for account_name in ("RRSP", "FHSA", "TFSA"):
         account = db.scalar(select(Account).where(Account.name == account_name))
         if not account:
             continue
-        rows = {str(year): new_room for year, new_room in years.items()}
-        if str(current_year) not in rows:
-            previous_tfsa_room = existing.get((account.id, str(current_year - 1)), years.get(current_year - 1, 0))
-            rows[str(current_year)] = {"FHSA": FHSA_ANNUAL_LIMIT, "TFSA": previous_tfsa_room}.get(account_name, 0)
+        rows = {str(year): new_room for year, new_room in baseline.get(account_name, {}).items()}
+        previous = existing.get((account.id, str(current_year - 1)), rows.get(str(current_year - 1)))
+        if str(current_year) not in rows and previous is not None:
+            rows[str(current_year)] = {"FHSA": FHSA_ANNUAL_LIMIT, "TFSA": previous}.get(account_name, 0)
         for tax_year, new_room in rows.items():
             if (account.id, tax_year) not in existing:
                 db.add(ContributionLimit(account_id=account.id, tax_year=tax_year, new_room=new_room))
@@ -689,9 +690,15 @@ def _available_funding_transactions(
             .group_by(Transaction.platform_id)
         )
     }
+    usage_query = select(TransactionFunding.contribution_id, func.sum(TransactionFunding.amount)).where(
+        TransactionFunding.contribution_id.in_([contribution.id for contribution, _ in contributions])
+    )
+    if transaction:
+        usage_query = usage_query.where(TransactionFunding.transaction_id != transaction.id)
+    usage = dict(db.execute(usage_query.group_by(TransactionFunding.contribution_id)).all())
     available = []
     for contribution, platform_name in contributions:
-        remaining = _cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction))
+        remaining = _cents(contribution.amount) - _cents(usage.get(contribution.id))
         # ponytail: withdrawals use up the oldest cash on their platform first, like funding allocation.
         taken = min(max(remaining, Decimal("0")), withdrawn.get(contribution.platform_id, Decimal("0")))
         if taken:
@@ -925,10 +932,6 @@ def get_all_contribution_room(db: Session):
     return result
 
 
-def get_contribution_used(db: Session, account_id: int, tax_year: int):
-    return _room_ledger(db)[1].get((account_id, tax_year), 0.0)
-
-
 def list_contribution_limits(db: Session):
     years = tracked_years(db)
     ledger = _room_ledger(db)
@@ -972,6 +975,58 @@ def export_all_data(db: Session):
     return {table.name: _rows_for_export(db, table) for table in _backup_tables()}
 
 
+def _repair_backup_rows(data: dict, tables) -> dict:
+    """Fix what older backups carry: legacy funding links and duplicate limits/categories."""
+    data = {name: [dict(row) for row in rows] for name, rows in data.items()}
+    transactions = data.get("transactions", [])
+    fundings = data.setdefault("transaction_fundings", [])
+
+    # Pre-migration backups link a buy to its contribution through transactions.contribution_id.
+    funded = {row.get("transaction_id") for row in fundings}
+    transaction_ids = {row.get("id") for row in transactions}
+    next_id = max((row.get("id") or 0 for row in fundings), default=0)
+    for row in transactions:
+        contribution_id = row.get("contribution_id")
+        if (
+            contribution_id in transaction_ids
+            and row.get("transaction_type") == TransactionType.investment_buy.value
+            and row.get("id") not in funded
+        ):
+            next_id += 1
+            amount = Decimal(str(row.get("amount") or 0)) + Decimal(str(row.get("fees") or 0))
+            fundings.append({"id": next_id, "transaction_id": row["id"], "contribution_id": contribution_id, "amount": float(amount)})
+
+    account_names = {row.get("id"): row.get("name") for row in data.get("accounts", [])}
+    limits = {}
+    for row in data.get("contribution_limits", []):
+        key = (row.get("account_id"), str(row.get("tax_year")))
+        kept = limits.setdefault(key, row)
+        if _cents(kept.get("new_room")) != _cents(row.get("new_room")):
+            raise ValueError(
+                f"Backup has conflicting contribution limits for {account_names.get(key[0], key[0])} {key[1]}: "
+                f"{kept.get('new_room')} and {row.get('new_room')}"
+            )
+    if "contribution_limits" in data:
+        data["contribution_limits"] = list(limits.values())
+
+    categories = {}
+    category_ids = {}
+    for row in data.get("categories", []):
+        key = (str(row.get("broad") or "").strip().lower(), str(row.get("precise") or "").strip().lower())
+        kept = categories.setdefault(key, row)
+        category_ids[row.get("id")] = kept.get("id")
+    if "categories" in data:
+        data["categories"] = list(categories.values())
+    for table in tables:
+        for foreign_key in table.foreign_keys:
+            if foreign_key.column.table.name != "categories":
+                continue
+            for row in data.get(table.name, []):
+                if row.get(foreign_key.parent.name) in category_ids:
+                    row[foreign_key.parent.name] = category_ids[row[foreign_key.parent.name]]
+    return data
+
+
 def restore_all_data(db: Session, payload: dict):
     data = payload.get("data")
     if not isinstance(data, dict):
@@ -995,6 +1050,7 @@ def restore_all_data(db: Session, payload: dict):
         raise ValueError("Backup table data must be a list of rows")
     if any(not isinstance(row, dict) for rows in data.values() for row in rows):
         raise ValueError("Backup rows must be objects")
+    data = _repair_backup_rows(data, tables)
 
     for table in reversed(tables):
         db.execute(table.delete())
