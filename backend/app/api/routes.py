@@ -296,7 +296,7 @@ def get_distribution(
     group_by: str = Query(pattern="^(sector|account|platform)$"),
     year: int | None = Query(default=None),
     category_level: str = Query(default="precise", pattern="^(broad|precise)$"),
-    currency: str = Query(default="CAD", pattern="^[A-Z]{3}$"),
+    currency: str = Query(default="CAD", pattern="^(CAD|USD)$"),
     db: Session = Depends(get_db),
 ):
     return distribution(db, group_by, year, category_level, currency)
@@ -305,7 +305,7 @@ def get_distribution(
 @router.get("/analytics/timeseries", response_model=list[TimeSeriesRead])
 def get_timeseries(
     year: int | None = Query(default=None),
-    currency: str = Query(default="CAD", pattern="^[A-Z]{3}$"),
+    currency: str = Query(default="CAD", pattern="^(CAD|USD)$"),
     db: Session = Depends(get_db),
 ):
     return timeseries(db, year, currency)
