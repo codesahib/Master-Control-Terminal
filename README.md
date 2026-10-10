@@ -1,84 +1,74 @@
-# Master Terminal v1
+# Master Terminal
 
-Finance-first personal console with FastAPI + React/TypeScript + Postgres.
+Personal finance console for RRSP, TFSA and FHSA accounts. FastAPI + SQLAlchemy + Postgres backend, React + TypeScript + Vite frontend.
 
 ## Features
-- RRSP/TFSA/FHSA contribution room tracking
-- Manual transaction logging with type-first flow
-- One-click full-data JSON export for manual backups before resetting volumes
-- Matching JSON backup restore to rebuild data after a reset
-- Spreadsheet preview imports for contributions and holdings
-- Analytics endpoints for sector/account/platform distributions and trend time series
-- Dark-themed dashboard with charts and transaction table
-- Docker Compose deployment (`web`, `api`, `db`)
+- Contribution room per account and tax year: RRSP 60-day deadline, FHSA $8,000 carry-forward cap and $40,000 lifetime limit, TFSA withdrawals added back the next year.
+- Transactions: contributions, buys, sells, dividends, reinvestments, transfers, currency exchanges, unit adjustments and withdrawals. Edit and delete, with funding checks and a check that no sale exceeds the units held.
+- Holdings and P/L derived from transactions, with live prices (Yahoo Finance) and manual values for GICs and funds.
+- Overview: portfolio value history, allocation in CAD, needs-attention list, money in vs invested.
+- Light, dark and system themes. Works from 360px phones to wide desktops: sidebar, icon rail or bottom tabs.
+- JSON export and restore. The app downloads a fresh export before every restore.
 
 ## Run with Docker
-### Hosted DB / Supabase
-Create `.env` from `.env.example`, then set:
-- `DATABASE_URL` for host tools and local backend runs.
-- `DATABASE_POOLER_URL` for Docker. Use Supabase's session pooler connection string.
+Create `.env` from `.env.example`.
 
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Direct Postgres URL, for host tools and local backend runs |
+| `DATABASE_POOLER_URL` | Supabase session pooler URL, used by Docker when set |
+| `API_TOKEN` | Shared secret. When set, every request except `/health` must send `X-API-Token`. The web container gets it as `VITE_API_TOKEN` |
+| `CORS_ORIGINS` | Allowed browser origins, comma separated (default `http://localhost:5173`) |
+| `API_PORT`, `WEB_PORT`, `DB_PORT` | Host ports (defaults 8000, 5173, 5433). All bind to 127.0.0.1 only |
+
+Without `API_TOKEN`, requests must send `X-Requested-With: master-terminal`. That forces a CORS preflight, so other websites cannot call the API. Set a token anyway.
+
+### Hosted DB (Supabase)
 ```bash
 docker compose up --build -d
 ```
-
-- Frontend: http://localhost:5173
-- API docs: http://localhost:8000/docs
-- Hosted DB startup skips migrations; run `alembic upgrade head` explicitly when schema changes.
-- Docker starts only `web` and `api`; it does not start local Postgres.
+- Frontend: http://localhost:5173. API docs: http://localhost:8000/docs.
+- Startup does not run migrations against a hosted DB. Back up first (`scripts/backup.sh`), then run `alembic upgrade head` yourself.
+- Row-level security is enabled on every app table. The `postgres` role owns the tables and bypasses it; the Supabase anon role sees nothing.
 
 ### Local DB
-Use the local overlay when you want Docker to start Postgres too:
-
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
+Starts `db`, `api` and `web`, points the API at the local Postgres and runs migrations on startup.
 
-- Starts `db`, `api`, and `web`.
-- Forces the API to use `postgresql+psycopg://postgres:postgres@db:5432/master_terminal`.
-- Runs migrations on startup.
+### Running the frontend outside Docker
+```bash
+cd frontend && npm ci && npm run dev
+```
+If `API_TOKEN` is set, put the same value in `frontend/.env` as `VITE_API_TOKEN`.
 
-## API Endpoints
-- `POST /transactions`
-- `GET /transactions`
-- `GET /export`
-- `POST /import-backup`
-- `POST /imports/contributions`
-- `POST /imports/holdings`
-- `GET /limits/{year}`
-- `GET /analytics/distribution?group_by=sector|account|platform`
-- `GET /analytics/timeseries`
+## Backups
+`scripts/backup.sh` runs `pg_dump` (public schema) in Docker. It writes to `~/Backups/master-control-terminal/<UTC timestamp>/`, keeps the newest 14, and never prints the database URL. The header has a cron line for nightly runs and the restore command.
 
-## Local Dev (optional)
-### Backend
+## Database migrations
 ```bash
 cd backend
-python -m venv .venv
-.venv/Scripts/activate
-pip install -r requirements.txt
-# Optional; .env also works.
-export DATABASE_URL="postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres\
-?sslmode=require"
-alembic upgrade head
-uvicorn app.main:app --reload
+alembic upgrade head        # apply
+alembic check               # models and migrations must match
 ```
+Tables that exist only in the database (not in the app models) are ignored by `alembic check` and autogenerate.
 
-### Migrations
-```bash
-cd backend
-alembic revision --autogenerate -m "describe change"
-alembic upgrade head
-```
+## API overview
+- Reference data: `GET /years`, `GET /platforms`, `GET /symbols/search`, `POST /symbols`
+- Contributions: `GET/POST /contributions`, `PUT/DELETE /contributions/{id}`, `GET /available-contributions`
+- Account transactions: `GET/POST /account-transactions`, `PUT/DELETE /account-transactions/{id}`, `GET /transactions` (all activity; `page_size` 1-100)
+- Room: `GET /limits/{year}`, `GET /limits`, `GET /contribution-limits`, `PUT /contribution-limits/{account}/{tax_year}`
+- Portfolio: `GET /holdings`, `GET /portfolio/pl` (`sort_by`), `GET /portfolio/summary`, `GET /portfolio/overview`, `GET /portfolio/health`, `GET /portfolio/history`
+- Analytics: `GET /analytics/distribution`, `GET /analytics/timeseries` (CAD)
+- Prices and values: `POST /market-prices/refresh` (also stores USD/CAD and today's portfolio snapshot), `POST /manual-valuations`
+- Backup: `GET /export`, `POST /import-backup`
 
-### Frontend
+## Tests and audits
 ```bash
-cd frontend
-npm install
-npm run dev
+cd backend && pip install -r requirements-dev.txt && pytest
 ```
-
-## Tests
-```bash
-cd backend
-pytest
-```
+- CI (`.github/workflows/ci.yml`): pytest, migrations plus `alembic check` on Postgres, frontend build.
+- `scripts/audit/smoke_endpoints.py --api URL --token TOKEN [--disposable]`: calls every endpoint. Use `--disposable` only on a throwaway database; it writes.
+- `scripts/audit/run_screens.sh WEB_URL`: screenshots and layout checks at 8 widths in light and dark (Playwright in Docker).
+- `psql "$DATABASE_URL" -f scripts/audit/db_checks.sql`: integrity checks.

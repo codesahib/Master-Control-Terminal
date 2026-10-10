@@ -84,7 +84,7 @@ async function checkModal(page, file) {
     const wide = [...el.querySelectorAll("input[type=checkbox]")].filter((c) => c.getBoundingClientRect().width > 40).length;
     return {
       fitsWidth: box.width <= innerWidth && r.left >= 0,
-      fitsHeight: box.height <= innerHeight,
+      fitsHeight: r.height <= innerHeight && r.top >= 0, // the dialog box; inner form may scroll
       submitVisibleWithoutScroll: !!s && s.top >= 0 && s.bottom <= innerHeight,
       oversizedCheckboxes: wide,
     };
@@ -114,7 +114,7 @@ await probe.close();
 
 for (const theme of themes) {
   for (const [width, height] of WIDTHS) {
-    const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme === "dark" ? "dark" : "light" });
+    const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme === "dark" ? "dark" : "light", reducedMotion: "reduce" });
     for (const [index, def] of pages.entries()) {
       const page = await context.newPage();
       const errors = [];
