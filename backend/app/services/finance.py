@@ -6,6 +6,7 @@ from enum import Enum
 from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.core.time import market_date
 from app.db.session import Base
 from app.models.models import (
     Account,
@@ -69,7 +70,7 @@ def _cents(value) -> Decimal:
 
 
 def tracked_years(db: Session, today: date | None = None) -> list[int]:
-    current_year = (today or date.today()).year
+    current_year = (today or market_date()).year
     first_transaction = db.scalar(select(func.min(Transaction.transaction_date)))
     first_limit = db.scalar(select(func.min(ContributionLimit.tax_year)))
     candidates = [current_year]
@@ -235,7 +236,7 @@ def seed_reference_data(db: Session) -> None:
 def seed_contribution_limits(db: Session, today: date | None = None) -> None:
     # Baseline rows only for an empty table; afterwards each account rolls into the new year
     # once it has a row for the previous year (accounts opened later never get fake room).
-    current_year = (today or date.today()).year
+    current_year = (today or market_date()).year
     existing = {
         (account_id, tax_year): new_room
         for account_id, tax_year, new_room in db.execute(

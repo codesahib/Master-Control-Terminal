@@ -19,6 +19,7 @@ Create `.env` from `.env.example`.
 | `DATABASE_POOLER_URL` | Supabase session pooler URL, used by Docker when set |
 | `API_TOKEN` | Shared secret. When set, every request except `/health` must send `X-API-Token`. The web container gets it as `VITE_API_TOKEN` |
 | `CORS_ORIGINS` | Allowed browser origins, comma separated (default `http://localhost:5173`) |
+| `ALLOWED_HOSTS` | Host headers the API accepts, comma separated (default `localhost,127.0.0.1`). Blocks DNS-rebinding pages |
 | `API_PORT`, `WEB_PORT`, `DB_PORT` | Host ports (defaults 8000, 5173, 5433). All bind to 127.0.0.1 only |
 
 Without `API_TOKEN`, requests must send `X-Requested-With: master-terminal`. That forces a CORS preflight, so other websites cannot call the API. Set a token anyway.

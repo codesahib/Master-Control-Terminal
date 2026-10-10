@@ -51,12 +51,7 @@ def make_session():
 
 
 def freeze_today(monkeypatch, frozen: date):
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return frozen
-
-    monkeypatch.setattr(finance, "date", FrozenDate)
+    monkeypatch.setattr(finance, "market_date", lambda: frozen)
 
 
 def add_accounts(db, *names):

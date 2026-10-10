@@ -211,7 +211,8 @@ def sort_pl_rows(rows: list[dict], sort_by: str = "symbol", sort_direction: str 
 
 
 def list_holdings(db: Session, account=None, year=None):
-    as_of_date = date.today() if year is None or year >= date.today().year else date(year, 12, 31)
+    today = market_date()
+    as_of_date = today if year is None or year >= today.year else date(year, 12, 31)
     source_platform = aliased(Platform)
     q = (
         select(
