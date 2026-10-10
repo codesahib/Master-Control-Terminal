@@ -248,6 +248,19 @@ def check_negative_cash(api):
                 WARNINGS.append(f"negative cash: {leaf['account_name']} / {leaf.get('platform_name')} / {leaf['currency']} = {leaf['book_value']}")
 
 
+def check_auth(api, spec):
+    """When the API declares auth, requests without the headers (or with a wrong token) must be rejected."""
+    if not spec.get("components", {}).get("securitySchemes"):
+        return
+    saved = api.headers
+    api.headers = {}
+    api.call("GET", "/years", expect=(401, 403), label="/years [no auth headers]")
+    api.headers = {**saved, "X-API-Token": "wrong-token"}
+    if saved.get("X-API-Token"):
+        api.call("GET", "/years", expect=(401,), label="/years [wrong token]")
+    api.headers = saved
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api", default=os.environ.get("API_URL", "http://127.0.0.1:8000"))
@@ -265,6 +278,7 @@ def main():
     ctx = {"enums": {name: s["enum"] for name, s in spec["components"]["schemas"].items() if "enum" in s},
            "platform": (platforms or ["Wealthsimple"])[0], "skip_network": args.skip_network}
 
+    check_auth(api, spec)
     run_gets(api, spec, ctx)
     run_bad_params(api, spec, ctx)
     run_invalid_writes(api, spec)

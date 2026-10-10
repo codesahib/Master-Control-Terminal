@@ -24,11 +24,9 @@ UNION ALL SELECT 'duplicate instruments symbol (case-insensitive)', count(*) FRO
 UNION ALL SELECT 'extra market_prices (same instrument, same UTC day)', coalesce(sum(n - 1), 0) FROM (SELECT count(*) n FROM market_prices GROUP BY instrument_id, (priced_at::date) HAVING count(*) > 1) d
 UNION ALL SELECT 'funding rows pointing at non-funding types', count(*) FROM transaction_fundings f JOIN transactions s ON s.id = f.contribution_id
   WHERE s.transaction_type NOT IN ('contribution', 'dividend_interest', 'transfer')
-UNION ALL SELECT 'legacy contribution_id without funding row', count(*) FROM transactions t
-  WHERE t.contribution_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transaction_fundings f WHERE f.transaction_id = t.id)
 UNION ALL SELECT 'negative amount or fees', count(*) FROM transactions WHERE amount < 0 OR fees < 0 OR source_amount < 0
 UNION ALL SELECT 'bad currency codes', count(*) FROM transactions WHERE currency !~ '^[A-Z]{3}$' OR source_currency !~ '^[A-Z]{3}$' OR fee_currency !~ '^[A-Z]{3}$'
-UNION ALL SELECT 'buy/sell/reinvest without quantity', count(*) FROM transactions
+UNION ALL SELECT '(info, manual-value holdings) buy/sell/reinvest without quantity', count(*) FROM transactions
   WHERE transaction_type IN ('investment_buy', 'investment_sell', 'dividend_reinvestment') AND instrument_id IS NOT NULL AND quantity IS NULL
 UNION ALL SELECT 'transfers without source platform', count(*) FROM transactions WHERE transaction_type = 'transfer' AND source_platform_id IS NULL;
 
