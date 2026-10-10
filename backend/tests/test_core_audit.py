@@ -31,10 +31,12 @@ from app.services.finance import (
     delete_transaction,
     get_all_contribution_room,
     get_contribution_room,
+    list_available_contributions,
     list_contribution_limits,
     seed_contribution_limits,
     seed_reference_data,
     tracked_years,
+    update_account_transaction,
     update_contribution,
     upsert_contribution_limit,
 )
@@ -236,16 +238,16 @@ def test_sell_cannot_exceed_held_units_and_failed_saves_leave_no_orphans():
         trade = dict(account_name="TFSA", platform_name="Wealthsimple", symbol="XEQT", currency="CAD")
         create_account_transaction(db, AccountTransactionCreate(transaction_type=TransactionType.investment_buy, transaction_date=date(2026, 2, 1), amount=300, quantity=10, **trade))
 
-        with pytest.raises(ValueError, match="only 10 held"):
+        with pytest.raises(ConflictError, match="exceed the units held on 2026-03-01"):
             create_account_transaction(db, AccountTransactionCreate(transaction_type=TransactionType.investment_sell, transaction_date=date(2026, 3, 1), amount=360, quantity=12, **trade))
         db.rollback()
-        with pytest.raises(ValueError, match="only 0 held"):
+        with pytest.raises(ConflictError, match="exceed the units held on 2026-01-01"):
             create_account_transaction(db, AccountTransactionCreate(transaction_type=TransactionType.investment_sell, transaction_date=date(2026, 1, 1), amount=30, quantity=1, **trade))
         db.rollback()
         sold = create_account_transaction(db, AccountTransactionCreate(transaction_type=TransactionType.investment_sell, transaction_date=date(2026, 3, 1), amount=300, quantity=10, **trade))
         assert sold.id
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ConflictError):
             create_account_transaction(
                 db,
                 AccountTransactionCreate(
@@ -261,6 +263,52 @@ def test_sell_cannot_exceed_held_units_and_failed_saves_leave_no_orphans():
         db.rollback()
         assert db.scalar(select(Platform).where(Platform.canonical_name == "Brand New Broker")) is None
         assert db.scalar(select(Instrument).where(Instrument.symbol == "NEWSYM")) is None
+
+
+def test_edits_and_deletes_cannot_strand_a_later_sale():
+    Session = make_session()
+    with Session() as db:
+        add_accounts(db, "TFSA")
+        db.commit()
+        trade = dict(account_name="TFSA", platform_name="Wealthsimple", symbol="XEQT", currency="CAD")
+        buy_fields = dict(transaction_type=TransactionType.investment_buy, transaction_date=date(2026, 2, 1), amount=300, **trade)
+        buy = create_account_transaction(db, AccountTransactionCreate(quantity=10, **buy_fields))
+        create_account_transaction(db, AccountTransactionCreate(transaction_type=TransactionType.investment_sell, transaction_date=date(2026, 3, 2), amount=240, quantity=8, **trade))
+
+        with pytest.raises(ConflictError, match="exceed the units held on 2026-03-02"):
+            update_account_transaction(db, buy.id, AccountTransactionCreate(quantity=5, **buy_fields))
+        db.rollback()
+        with pytest.raises(ConflictError, match="2026-03-02"):
+            update_account_transaction(db, buy.id, AccountTransactionCreate(quantity=10, **{**buy_fields, "platform_name": "Questrade"}))
+        db.rollback()
+        with pytest.raises(ConflictError, match="exceed the units held on 2026-03-02"):
+            delete_transaction(db, buy.id, contribution=False)
+        db.rollback()
+
+        assert db.get(Transaction, buy.id).quantity == 10
+        assert update_account_transaction(db, buy.id, AccountTransactionCreate(quantity=8, **buy_fields)).quantity == 8
+
+
+def test_withdrawals_use_up_funding_cash():
+    Session = make_session()
+    with Session() as db:
+        add_accounts(db, "TFSA")
+        db.commit()
+        source = create_contribution(db, ContributionCreate(transaction_date=date(2026, 1, 1), account_name="TFSA", platform_name="Wealthsimple", amount=500))
+        withdraw = dict(transaction_type=TransactionType.withdrawal, transaction_date=date(2026, 2, 1), account_name="TFSA", platform_name="Wealthsimple")
+        partial = create_account_transaction(db, AccountTransactionCreate(amount=200, **withdraw))
+        assert [pool["remaining_amount"] for pool in list_available_contributions(db, "TFSA")] == [300]
+
+        buy = dict(transaction_type=TransactionType.investment_buy, transaction_date=date(2026, 3, 1), account_name="TFSA", platform_name="Wealthsimple", symbol="XEQT", quantity=1)
+        with pytest.raises(ValueError, match="only \\$300.00 remaining"):
+            create_account_transaction(db, AccountTransactionCreate(amount=400, funding_cash_sources=[{"platform_name": "Wealthsimple", "amount": 400}], **buy))
+        db.rollback()
+        with pytest.raises(ValueError, match="only \\$300.00 remaining"):
+            create_account_transaction(db, AccountTransactionCreate(amount=400, funding_contributions=[{"contribution_id": source.id, "amount": 400}], **buy))
+        db.rollback()
+
+        update_account_transaction(db, partial.id, AccountTransactionCreate(amount=500, **withdraw))
+        assert sum(pool["remaining_amount"] for pool in list_available_contributions(db, "TFSA")) == 0
 
 
 def test_funding_sources_cannot_shrink_below_what_they_fund_and_delete_rules():
@@ -338,6 +386,8 @@ def test_routes_status_codes_page_size_and_backup_version():
 
         bad_account = {"transaction_type": "withdrawal", "transaction_date": "2026-02-01", "account_name": "XYZ", "platform_name": "Wealthsimple", "amount": 10}
         assert client.post("/account-transactions", json=bad_account, headers=HEADERS).status_code == 422
+        oversell = {"transaction_type": "investment_sell", "transaction_date": "2026-02-01", "account_name": "TFSA", "platform_name": "Wealthsimple", "symbol": "XEQT", "amount": 10, "quantity": 1}
+        assert client.post("/account-transactions", json=oversell, headers=HEADERS).status_code == 409
         withdrawal = client.post("/account-transactions", json={**bad_account, "account_name": "TFSA"}, headers=HEADERS)
         assert withdrawal.status_code == 200
         assert client.delete(f"/account-transactions/{withdrawal.json()['id']}", headers=HEADERS).status_code == 204

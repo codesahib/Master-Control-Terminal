@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, case, func, or_, select, text
+from sqlalchemy import Date, DateTime, Enum as SqlEnum, and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.db.session import Base
@@ -29,6 +29,12 @@ FHSA_LIFETIME_LIMIT = 40000.0
 BACKUP_FORMAT = "master-control-terminal-export"
 BACKUP_FORMAT_VERSION = 2
 FUNDING_SOURCE_TYPES = {TransactionType.contribution, TransactionType.dividend_interest, TransactionType.transfer}
+POSITION_TYPES = {
+    TransactionType.investment_buy,
+    TransactionType.investment_sell,
+    TransactionType.dividend_reinvestment,
+    TransactionType.quantity_adjustment,
+}
 CENT = Decimal("0.01")
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
 BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs"}
@@ -393,6 +399,7 @@ def _save_transaction(
     transaction_type: TransactionType | None = None,
 ) -> Transaction:
     before = _transaction_payload(db, txn) if txn else None
+    old_position = _position_key(txn) if txn else None
     account = get_account(db, payload.account_name)
     platform = normalize_platform(db, payload.platform_name)
     source_platform = normalize_platform(db, getattr(payload, "source_platform_name", None))
@@ -432,7 +439,7 @@ def _save_transaction(
         _replace_transaction_fundings(db, txn, payload)
         db.flush()
 
-    _validate_sell_quantity(db, txn)
+    _check_positions(db, old_position, _position_key(txn))
     log_audit(
         db,
         "update" if before else "create",
@@ -482,9 +489,11 @@ def delete_transaction(db: Session, transaction_id: int, contribution: bool) -> 
         raise ConflictError("other transactions are funded by this entry; edit or delete them first")
     before = _transaction_payload(db, txn)
     summary = f"{txn.transaction_type.value} transaction deleted"
+    position = _position_key(txn)
     db.query(TransactionFunding).filter(TransactionFunding.transaction_id == txn.id).delete()
     db.delete(txn)
     db.flush()
+    _check_positions(db, position)
     log_audit(db, "delete", "transactions", row_id=transaction_id, summary=summary, before=before, source="transactions")
     db.commit()
 
@@ -502,34 +511,34 @@ def _check_funding_source_edit(
         raise ConflictError(f"this entry already funds ${used:.2f} of other transactions, so its amount cannot go below that")
 
 
-def _validate_sell_quantity(db: Session, txn: Transaction) -> None:
-    if txn.transaction_type != TransactionType.investment_sell or not txn.quantity:
-        return
-    signed_quantity = case(
-        (Transaction.transaction_type == TransactionType.investment_sell, -Transaction.quantity),
-        else_=Transaction.quantity,
-    )
-    held = db.scalar(
-        select(func.coalesce(func.sum(signed_quantity), 0)).where(
-            Transaction.account_id == txn.account_id,
-            Transaction.platform_id == txn.platform_id,
-            Transaction.instrument_id == txn.instrument_id,
-            Transaction.transaction_type.in_(
-                [
-                    TransactionType.investment_buy,
-                    TransactionType.dividend_reinvestment,
-                    TransactionType.quantity_adjustment,
-                    TransactionType.investment_sell,
-                ]
-            ),
-            Transaction.quantity.is_not(None),
-            Transaction.transaction_date <= txn.transaction_date,
-            Transaction.id != txn.id,
+def _position_key(txn: Transaction):
+    if txn.transaction_type not in POSITION_TYPES or txn.quantity is None:
+        return None
+    return txn.account_id, txn.platform_id, txn.instrument_id
+
+
+def _check_positions(db: Session, *positions) -> None:
+    """Reject a change that makes the running quantity of any touched position go below zero."""
+    for account_id, platform_id, instrument_id in {position for position in positions if position}:
+        rows = db.execute(
+            select(Transaction.transaction_type, Transaction.quantity, Transaction.transaction_date)
+            .where(
+                Transaction.account_id == account_id,
+                Transaction.platform_id == platform_id,
+                Transaction.instrument_id == instrument_id,
+                Transaction.transaction_type.in_(POSITION_TYPES),
+                Transaction.quantity.is_not(None),
+            )
+            .order_by(Transaction.transaction_date, Transaction.id)
         )
-    )
-    # ponytail: tolerance absorbs float quantities until the column is exact numeric.
-    if float(txn.quantity) > float(held or 0) + 1e-9:
-        raise ValueError(f"cannot sell {float(txn.quantity):g} units: only {float(held or 0):g} held on {txn.transaction_date}")
+        held = 0.0
+        for transaction_type, quantity, transaction_date in rows:
+            held += -float(quantity) if transaction_type == TransactionType.investment_sell else float(quantity)
+            # ponytail: tolerance absorbs float quantities until Python reads the numeric column as Decimal.
+            if held < -1e-9:
+                if transaction_type == TransactionType.investment_sell:
+                    raise ConflictError(f"this change would make a sale exceed the units held on {transaction_date}")
+                raise ConflictError(f"this change would leave fewer than zero units held on {transaction_date}")
 
 
 def _funding_contributions(
@@ -604,6 +613,7 @@ def _validate_contribution_funding(
     if funding_total != _cents(Decimal(str(cash_amount)) + Decimal(str(payload.fees or 0))):
         raise ValueError("funding contributions must total the transaction amount plus fees")
 
+    available = {source["id"]: _cents(source["remaining_amount"]) for source in _available_funding_transactions(db, payload.account_name, transaction)}
     for funding in fundings:
         contribution_id = funding.contribution_id if hasattr(funding, "contribution_id") else funding["contribution_id"]
         amount = float(funding.amount if hasattr(funding, "amount") else funding["amount"])
@@ -622,7 +632,7 @@ def _validate_contribution_funding(
             funding_platform = db.get(Platform, contribution.platform_id) if contribution.platform_id else None
             if not funding_platform or funding_platform.canonical_name.lower() != payload.source_platform_name.lower():
                 raise ValueError("transfer funding sources must belong to the source platform")
-        remaining = _cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction))
+        remaining = available.get(contribution.id, Decimal("0"))
         if _cents(amount) > remaining:
             raise ValueError(f"selected funding source has only ${remaining:.2f} remaining")
 
@@ -666,9 +676,27 @@ def _available_funding_transactions(
         )
         .order_by(Transaction.transaction_date, Transaction.id)
     ).all()
+    withdrawn = {
+        platform_id: _cents(total)
+        for platform_id, total in db.execute(
+            select(Transaction.platform_id, func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)))
+            .join(Account, Transaction.account_id == Account.id)
+            .where(
+                Transaction.transaction_type == TransactionType.withdrawal,
+                func.lower(Account.name) == account.lower(),
+                Transaction.id != (transaction.id if transaction else None),
+            )
+            .group_by(Transaction.platform_id)
+        )
+    }
     available = []
     for contribution, platform_name in contributions:
-        remaining = float(_cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction)))
+        remaining = _cents(contribution.amount) - _cents(_contribution_usage(db, contribution.id, transaction))
+        # ponytail: withdrawals use up the oldest cash on their platform first, like funding allocation.
+        taken = min(max(remaining, Decimal("0")), withdrawn.get(contribution.platform_id, Decimal("0")))
+        if taken:
+            withdrawn[contribution.platform_id] -= taken
+            remaining -= taken
         if remaining <= 0:
             continue
         available.append(
@@ -676,7 +704,7 @@ def _available_funding_transactions(
                 "id": contribution.id,
                 "platform_name": platform_name,
                 "platform_id": contribution.platform_id,
-                "remaining_amount": remaining,
+                "remaining_amount": float(remaining),
             }
         )
     return available
