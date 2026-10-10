@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.core.time import as_utc, utcnow
+from app.core.time import as_utc, market_date, utcnow
 from app.models.models import (
     Account,
     Category,
@@ -67,7 +67,7 @@ def portfolio_health(db: Session, year=None):
 def portfolio_history(db: Session, days: int = 365, currency: str = "CAD"):
     usd_cad_rate = latest_fx_rate(db)
     reporting = _effective_currency(currency, usd_cad_rate)
-    since = utcnow().date() - timedelta(days=days)
+    since = market_date() - timedelta(days=days)
     rows = db.execute(
         select(PortfolioSnapshot.snapshot_date, func.sum(PortfolioSnapshot.book_value), func.sum(PortfolioSnapshot.market_value))
         .where(PortfolioSnapshot.snapshot_date >= since)
@@ -86,8 +86,8 @@ def portfolio_history(db: Session, days: int = 365, currency: str = "CAD"):
 
 
 def record_portfolio_snapshots(db: Session) -> None:
-    """Upsert today's CAD book/market totals per account. Called after every price refresh."""
-    today = utcnow().date()
+    """Upsert today's (Toronto day) CAD book/market totals per account. Called after every price refresh."""
+    today = market_date()
     totals = {}
     for row in _portfolio_pl_rows(db):
         if row["book_value_reporting"] is None:

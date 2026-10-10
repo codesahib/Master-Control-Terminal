@@ -5,6 +5,7 @@ services:
       DATABASE_URL: ${DATABASE_POOLER_URL:-${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/master_terminal}}
       API_TOKEN: ${API_TOKEN:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-5173}}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
 
