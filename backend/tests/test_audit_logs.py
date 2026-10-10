@@ -35,7 +35,7 @@ def test_account_transaction_update_writes_audit_log_with_before_and_after():
                 account_name="TFSA",
                 platform_name="Wealthsimple",
                 amount=25,
-                contribution_id=contribution.id,
+                funding_contributions=[{"contribution_id": contribution.id, "amount": 25}],
             ),
         )
 
@@ -48,7 +48,7 @@ def test_account_transaction_update_writes_audit_log_with_before_and_after():
                 account_name="TFSA",
                 platform_name="Wealthsimple",
                 amount=40,
-                contribution_id=contribution.id,
+                funding_contributions=[{"contribution_id": contribution.id, "amount": 40}],
             ),
         )
 

@@ -13,10 +13,6 @@ from app.models.models import (
     Category,
     ContributionLimit,
     HoldingSnapshot,
-    Import,
-    ImportRow,
-    ImportStatus,
-    ImportType,
     Instrument,
     Platform,
     PlatformAlias,
@@ -36,6 +32,8 @@ FUNDING_SOURCE_TYPES = {TransactionType.contribution, TransactionType.dividend_i
 CENT = Decimal("0.01")
 LEGACY_BACKUP_TABLE_NAMES = {"holding_snapshots": "holdings_snapshots"}
 BACKUP_EXCLUDED_TABLE_NAMES = {"audit_logs"}
+# Tables dropped in migration 20261010_0011; older backups still carry them (empty in practice).
+LEGACY_DROPPED_TABLE_NAMES = {"imports", "import_rows"}
 CATEGORY_OPTIONS = {
     "Cash": ["Cash"],
     "Bond": ["Bond", "GIC", "Money Market"],
@@ -406,15 +404,12 @@ def _save_transaction(
     source_amount = getattr(payload, "source_amount", None)
     source_currency = getattr(payload, "source_currency", None)
     fee_currency = getattr(payload, "fee_currency", None)
-    reversal_of_id = getattr(payload, "reversal_of_id", None)
-    contribution_id = getattr(payload, "contribution_id", None)
     resolved_type = transaction_type or getattr(payload, "transaction_type")
     instrument = resolve_instrument(db, payload)
     category = get_or_create_category(db, broad_category, precise_category)
 
     if txn is None:
         txn = Transaction()
-        db.add(txn)
 
     txn.transaction_type = resolved_type
     txn.transaction_date = payload.transaction_date
@@ -431,8 +426,7 @@ def _save_transaction(
     txn.fees = fees
     txn.fee_currency = fee_currency
     txn.notes = payload.notes
-    txn.reversal_of_id = reversal_of_id
-    txn.contribution_id = contribution_id
+    db.add(txn)
     db.flush()
     if isinstance(payload, AccountTransactionCreate):
         _replace_transaction_fundings(db, txn, payload)
@@ -562,16 +556,7 @@ def _funding_contributions(
                 if not remaining_to_allocate:
                     break
         return allocations
-    if payload.funding_contributions:
-        return payload.funding_contributions
-    if payload.contribution_id:
-        return [
-            {
-                "contribution_id": payload.contribution_id,
-                "amount": (payload.source_amount if payload.source_amount is not None else payload.amount) + (payload.fees or 0),
-            }
-        ]
-    return []
+    return payload.funding_contributions
 
 
 def _replace_transaction_fundings(db: Session, transaction: Transaction, payload: AccountTransactionCreate) -> None:
@@ -592,17 +577,9 @@ def _contribution_usage(db: Session, contribution_id: int, transaction: Transact
     funding_usage = select(func.coalesce(func.sum(TransactionFunding.amount), 0)).where(
         TransactionFunding.contribution_id == contribution_id
     )
-    legacy_usage = select(func.coalesce(func.sum(Transaction.amount + func.coalesce(Transaction.fees, 0)), 0)).outerjoin(
-        TransactionFunding, TransactionFunding.transaction_id == Transaction.id
-    ).where(
-        Transaction.contribution_id == contribution_id,
-        Transaction.transaction_type == TransactionType.investment_buy,
-        TransactionFunding.id.is_(None),
-    )
     if transaction:
         funding_usage = funding_usage.where(TransactionFunding.transaction_id != transaction.id)
-        legacy_usage = legacy_usage.where(Transaction.id != transaction.id)
-    return float(db.scalar(funding_usage) or 0) + float(db.scalar(legacy_usage) or 0)
+    return float(db.scalar(funding_usage) or 0)
 
 
 def _validate_contribution_funding(
@@ -963,16 +940,6 @@ def upsert_contribution_limit(db: Session, account_name: str, tax_year: str, new
     return next(row for row in _account_room_rows(account, years, _room_ledger(db)) if row["tax_year"] == tax_year)
 
 
-def create_import_preview(db: Session, import_type: ImportType, source_filename: str, preview_rows: list[dict]):
-    imp = Import(import_type=import_type, source_filename=source_filename, status=ImportStatus.parsed)
-    db.add(imp)
-    db.flush()
-    for i, row in enumerate(preview_rows, start=1):
-        db.add(ImportRow(import_id=imp.id, row_number=i, payload_json=json.dumps(row), error=None))
-    db.commit()
-    return imp
-
-
 def export_all_data(db: Session):
     return {table.name: _rows_for_export(db, table) for table in _backup_tables()}
 
@@ -985,7 +952,11 @@ def restore_all_data(db: Session, payload: dict):
     for legacy_name, table_name in LEGACY_BACKUP_TABLE_NAMES.items():
         if legacy_name in data and table_name not in data:
             data[table_name] = data.pop(legacy_name)
-    data = {table_name: rows for table_name, rows in data.items() if table_name not in BACKUP_EXCLUDED_TABLE_NAMES}
+    data = {
+        table_name: rows
+        for table_name, rows in data.items()
+        if table_name not in BACKUP_EXCLUDED_TABLE_NAMES | LEGACY_DROPPED_TABLE_NAMES
+    }
 
     tables = _backup_tables()
     table_names = {table.name for table in tables}

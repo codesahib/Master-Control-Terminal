@@ -62,8 +62,6 @@ class AccountTransactionCreate(BaseModel):
     fees: Optional[float] = Field(default=0, ge=0)
     fee_currency: Optional[str] = Field(default=None, pattern="^[A-Z]{3}$")
     notes: Optional[str] = None
-    reversal_of_id: Optional[int] = None
-    contribution_id: Optional[int] = Field(default=None, gt=0)
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
     funding_cash_sources: list[FundingCashSource] = Field(default_factory=list)
 
@@ -71,10 +69,8 @@ class AccountTransactionCreate(BaseModel):
     def validate_account_transaction(self):
         if self.transaction_type == TransactionType.contribution:
             raise ValueError("use the contribution endpoints for contribution records")
-        if (self.contribution_id or self.funding_contributions) and self.funding_cash_sources:
+        if self.funding_contributions and self.funding_cash_sources:
             raise ValueError("use either funding contributions or funding cash sources")
-        if self.contribution_id and self.funding_contributions:
-            raise ValueError("use either contribution_id or funding_contributions")
         if len({funding.contribution_id for funding in self.funding_contributions}) != len(self.funding_contributions):
             raise ValueError("funding contributions must be unique")
         if len({source.platform_name.lower() for source in self.funding_cash_sources}) != len(self.funding_cash_sources):
@@ -99,7 +95,6 @@ class AccountTransactionCreate(BaseModel):
             or self.quantity == 0
             or self.amount != 0
             or self.fees
-            or self.contribution_id
             or self.funding_contributions
             or self.funding_cash_sources
         ):
@@ -113,7 +108,6 @@ class AccountTransactionCreate(BaseModel):
             or self.symbol
             or self.instrument_id
             or self.quantity is not None
-            or self.contribution_id
             or self.funding_contributions
             or self.funding_cash_sources
         ):
@@ -140,7 +134,6 @@ class TransactionRead(BaseModel):
     fees: Optional[float]
     fee_currency: Optional[str] = None
     notes: Optional[str]
-    contribution_id: Optional[int] = None
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
 
@@ -180,7 +173,6 @@ class AccountTransactionRead(BaseModel):
     fees: Optional[float]
     fee_currency: Optional[str] = None
     notes: Optional[str]
-    contribution_id: Optional[int] = None
     funding_contributions: list[FundingContribution] = Field(default_factory=list)
 
 
@@ -334,15 +326,3 @@ class PortfolioSummaryRead(BaseModel):
     investable_cash: list[PortfolioPLRow]
     allocation: list[DistributionPoint]
     account_pl: list[AccountPLSummary]
-
-
-class ImportPreviewRow(BaseModel):
-    row_number: int
-    payload: dict
-    error: Optional[str] = None
-
-
-class ImportPreviewResponse(BaseModel):
-    import_id: int
-    rows: list[ImportPreviewRow]
-    row_count: int

@@ -75,27 +75,11 @@ def _transaction_reads(db: Session, rows, read_model=TransactionRead) -> list[Tr
             {"contribution_id": contribution_id, "amount": float(amount), "platform_name": platform_name}
         )
 
-    legacy_ids = {transaction.contribution_id for transaction in transactions if transaction.contribution_id and not fundings[transaction.id]}
-    legacy_platform_names = dict(
-        db.execute(
-            select(Transaction.id, Platform.canonical_name)
-            .outerjoin(Platform, Transaction.platform_id == Platform.id)
-            .where(Transaction.id.in_(legacy_ids))
-        ).all()
-    ) if legacy_ids else {}
-
-    return [_transaction_read(row, source_platform_names, fundings, legacy_platform_names, read_model) for row in rows]
+    return [_transaction_read(row, source_platform_names, fundings, read_model) for row in rows]
 
 
-def _transaction_read(row, source_platform_names, fundings, legacy_platform_names, read_model) -> TransactionRead:
+def _transaction_read(row, source_platform_names, fundings, read_model) -> TransactionRead:
     transaction, account_name, platform_name, symbol, broad_category, precise_category = row
-    funding_contributions = fundings[transaction.id]
-    if not funding_contributions and transaction.contribution_id:
-        funding_contributions = [{
-            "contribution_id": transaction.contribution_id,
-            "amount": float(transaction.amount) + float(transaction.fees or 0),
-            "platform_name": legacy_platform_names.get(transaction.contribution_id),
-        }]
     return read_model(
         id=transaction.id,
         transaction_type=transaction.transaction_type,
@@ -115,8 +99,7 @@ def _transaction_read(row, source_platform_names, fundings, legacy_platform_name
         fees=float(transaction.fees or 0),
         fee_currency=transaction.fee_currency,
         notes=transaction.notes,
-        contribution_id=transaction.contribution_id,
-        funding_contributions=funding_contributions,
+        funding_contributions=fundings[transaction.id],
     )
 
 
