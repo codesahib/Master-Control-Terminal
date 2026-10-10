@@ -232,23 +232,6 @@ class DistributionPoint(BaseModel):
     value: float
 
 
-class TimeSeriesPoint(BaseModel):
-    month: str
-    contributions: float
-    investments: float
-
-
-class SymbolRead(BaseModel):
-    id: int
-    symbol: str
-    provider_symbol: str
-    name: Optional[str] = None
-    exchange: Optional[str] = None
-    currency: Optional[str] = None
-    asset_type: Optional[str] = None
-    provider: str
-
-
 class ManualValuationUpsert(BaseModel):
     account_name: AccountName
     platform_name: Optional[PlatformName] = None
