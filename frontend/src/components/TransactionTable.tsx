@@ -1,132 +1,110 @@
-import { type ReactNode, useMemo } from "react";
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
-import { ActivityRecord } from "../types";
+import type { ReactNode } from "react";
+import { money, shortDate, TYPE_LABELS } from "../lib/format";
+import type { ActivityRecord, TransactionType } from "../types";
+import { Icon } from "./Icon";
 
-type Variant = "all" | "contributions" | "transactions";
+type Row = ActivityRecord & {
+  transaction_type?: TransactionType;
+  symbol?: string;
+  broad_category?: string;
+  precise_category?: string;
+  fees?: number;
+  fee_currency?: string;
+  source_platform_name?: string;
+};
 
-export function TransactionTable<T extends ActivityRecord>({
-  data,
-  title = "Transaction History",
-  onEdit,
-  variant = "all",
-  showAccount = true,
-  controls,
-  pagination,
-  emptyMessage,
-}: {
-  data: T[];
-  title?: string;
-  onEdit?: (transaction: T) => void;
-  variant?: Variant;
+const INFLOW = new Set<TransactionType>(["contribution", "dividend_interest", "investment_sell"]);
+const OUTFLOW = new Set<TransactionType>(["investment_buy", "withdrawal"]);
+
+export function Pager({ page, pageSize, total, onPageChange }: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const first = total ? (page - 1) * pageSize + 1 : 0;
+  return (
+    <div className="pager">
+      <span className="muted">{total ? `${first} to ${Math.min(page * pageSize, total)} of ${total}` : "No records"}</span>
+      <div className="pg">
+        <button className="btn btn-s icon-btn sm" type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><Icon name="left" size={16} /></button>
+        <span className="pgn">Page {page} of {pages}</span>
+        <button className="btn btn-s icon-btn sm" type="button" aria-label="Next page" disabled={page >= pages} onClick={() => onPageChange(page + 1)}><Icon name="right" size={16} /></button>
+      </div>
+    </div>
+  );
+}
+
+interface Props<T extends Row> {
+  title: string;
+  rows: T[];
+  variant?: "all" | "contributions" | "transactions";
   showAccount?: boolean;
   controls?: ReactNode;
-  pagination?: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void };
+  footer?: ReactNode;
   emptyMessage?: string;
-}) {
-  const isContributionTable = variant === "contributions";
-  const isTransactionTable = variant === "transactions";
+  onEdit?: (row: T) => void;
+  onDelete?: (row: T) => void;
+}
 
-  const columns = useMemo<ColumnDef<T>[]>(
-    () => {
-      const baseColumns: ColumnDef<T>[] = [{ header: "Date", accessorKey: "transaction_date" }];
-
-      if (!isContributionTable) {
-        baseColumns.push({ header: "Type", accessorKey: "transaction_type" });
-      }
-
-      if (showAccount) {
-        baseColumns.push({ header: "Account", accessorKey: "account_name" });
-      }
-
-      baseColumns.push({ header: "Platform", accessorKey: "platform_name" });
-
-      if (!isContributionTable) {
-        baseColumns.push(
-          { header: "Symbol", accessorKey: "symbol" },
-          { header: "Broad Category", accessorKey: "broad_category" },
-          { header: "Precise Category", accessorKey: "precise_category" }
-        );
-      }
-
-      baseColumns.push({ header: "Amount", accessorKey: "amount" });
-      baseColumns.push({ header: "Currency", accessorKey: "currency" });
-
-      if (isTransactionTable || variant === "all") {
-        baseColumns.push({ header: "Fees", accessorKey: "fees" });
-      }
-
-      baseColumns.push({ header: "Notes", accessorKey: "notes" });
-
-      if (onEdit) {
-        baseColumns.push({
-          header: "Actions",
-          cell: ({ row }) => (
-            <button className="btn btn-secondary table-action" onClick={() => onEdit(row.original)}>
-              Edit
-            </button>
-          ),
-        } as ColumnDef<T>);
-      }
-
-      return baseColumns;
-    },
-    [isContributionTable, isTransactionTable, onEdit, showAccount, variant]
-  );
-
-  const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
-
+export function TransactionTable<T extends Row>({ title, rows, variant = "all", showAccount = true, controls, footer, emptyMessage, onEdit, onDelete }: Props<T>) {
+  const isContributions = variant === "contributions";
   return (
-    <div className="panel table-wrap">
-      <div className="table-header">
-        <h3>{title}</h3>
+    <section className="card s12">
+      <div className="card-h">
+        <h2 className="card-t">{title}</h2>
         {controls}
       </div>
-      <table>
-        <thead>
-          {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id}>
-              {hg.headers.map((h) => (
-                <th key={h.id}>{flexRender(h.column.columnDef.header, h.getContext())}</th>
-              ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id}>
-              {row.getVisibleCells().map((cell) => (
-                <td
-                  key={cell.id}
-                  data-label={typeof cell.column.columnDef.header === "string" ? cell.column.columnDef.header : undefined}
-                >
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </td>
-              ))}
-            </tr>
-          ))}
-          {table.getRowModel().rows.length === 0 && (
+      <div className="tbl-wrap">
+        <table className="tbl tbl-cards">
+          <thead>
             <tr>
-              <td className="empty-state" colSpan={columns.length}>
-                {emptyMessage || "No records match the current filters."}
-              </td>
+              <th>Date</th>
+              {!isContributions && <th>Type</th>}
+              {showAccount && <th>Account</th>}
+              <th>Platform</th>
+              {!isContributions && <th>Symbol</th>}
+              <th className="r">Amount</th>
+              {!isContributions && <th className="r">Fees</th>}
+              <th>Notes</th>
+              {(onEdit || onDelete) && <th><span className="sr-only">Actions</span></th>}
             </tr>
-          )}
-        </tbody>
-      </table>
-      {pagination && (
-        <div className="pagination">
-          <small>Page {pagination.page} of {Math.max(1, Math.ceil(pagination.total / pagination.pageSize))} · {pagination.total} records</small>
-          <div>
-            <button className="btn btn-secondary table-action" disabled={pagination.page === 1} onClick={() => pagination.onPageChange(pagination.page - 1)}>Previous</button>
-            <button className="btn btn-secondary table-action" disabled={pagination.page * pagination.pageSize >= pagination.total} onClick={() => pagination.onPageChange(pagination.page + 1)}>Next</button>
-          </div>
-        </div>
-      )}
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const type = row.transaction_type || "contribution";
+              const tone = INFLOW.has(type) ? "pos" : OUTFLOW.has(type) ? "" : "dim";
+              return (
+                <tr key={row.id}>
+                  <td data-label="Date" className="nowrap">{shortDate(row.transaction_date)}</td>
+                  {!isContributions && (
+                    <td data-label="Type"><span className={`type-chip t-${type}`}><Icon name={type} size={14} />{TYPE_LABELS[type]}</span></td>
+                  )}
+                  {showAccount && <td data-label="Account"><span className="tag">{row.account_name || "–"}</span></td>}
+                  <td data-label="Platform">{row.source_platform_name ? `${row.source_platform_name} to ${row.platform_name || "–"}` : row.platform_name || "–"}</td>
+                  {!isContributions && (
+                    <td data-label="Symbol">
+                      <b className="mono">{row.symbol || "–"}</b>
+                      {(row.precise_category || row.broad_category) && <div className="muted">{row.precise_category || row.broad_category}</div>}
+                    </td>
+                  )}
+                  <td data-label="Amount" className={`r num money ${tone}`}>{money(row.amount, row.currency)}</td>
+                  {!isContributions && <td data-label="Fees" className="r num money">{row.fees ? money(row.fees, row.fee_currency || row.currency) : "–"}</td>}
+                  <td data-label="Notes" className="notes">{row.notes || "–"}</td>
+                  {(onEdit || onDelete) && (
+                    <td data-label="Actions" className="row-actions">
+                      {onEdit && <button className="btn btn-g icon-btn sm" type="button" onClick={() => onEdit(row)} aria-label={`Edit ${TYPE_LABELS[type]} on ${row.transaction_date}`}><Icon name="edit" size={16} /></button>}
+                      {onDelete && <button className="btn btn-g icon-btn sm danger" type="button" onClick={() => onDelete(row)} aria-label={`Delete ${TYPE_LABELS[type]} on ${row.transaction_date}`}><Icon name="trash" size={16} /></button>}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr className="empty-row">
+                <td colSpan={9} className="empty">{emptyMessage || "No records match the current filters."}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {footer}
+    </section>
   );
 }

@@ -1,0 +1,71 @@
+import { useRef, useState } from "react";
+import { Icon } from "../components/Icon";
+import { useApp } from "../context";
+import { downloadExport, restoreBackup } from "../lib/actions";
+import { errorMessage, timeAgo } from "../lib/format";
+
+export function DataActions() {
+  const { health, refreshPrices, refreshingPrices, openModal, notify, refresh } = useApp();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
+
+  async function exportNow() {
+    setExporting(true);
+    try {
+      notify(`Saved ${await downloadExport()}.`);
+    } catch (error) {
+      notify(errorMessage(error, "Export failed. Try again."), "error");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function pickedFile(file: File | undefined) {
+    if (fileRef.current) fileRef.current.value = "";
+    if (!file) return;
+    openModal({
+      kind: "confirm",
+      title: "Replace all data with this backup?",
+      message: `"${file.name}" will replace every account, transaction, limit and price. Your current data downloads first as a pre-restore backup, so you can undo this by importing that file.`,
+      confirmLabel: "Download backup and restore",
+      danger: true,
+      onConfirm: async () => {
+        const savedAs = await restoreBackup(file);
+        notify(`Backup restored. Previous data saved as ${savedAs}.`);
+        refresh();
+      },
+    });
+  }
+
+  return (
+    <ul className="action-list">
+      <li className="action-item">
+        <span className="ai ai-acc"><Icon name="refresh" /></span>
+        <div className="attn-b"><b>Refresh prices</b><span className="muted">Last update {timeAgo(health?.prices_updated_at)}. Also saves today's value snapshot.</span></div>
+        <button className="btn btn-s" type="button" onClick={refreshPrices} disabled={refreshingPrices}>{refreshingPrices ? "Refreshing…" : "Refresh"}</button>
+      </li>
+      <li className="action-item">
+        <span className="ai ai-info"><Icon name="download" /></span>
+        <div className="attn-b"><b>Export data</b><span className="muted">Download a full JSON backup.</span></div>
+        <button className="btn btn-s" type="button" onClick={exportNow} disabled={exporting}>{exporting ? "Exporting…" : "Export"}</button>
+      </li>
+      <li className="action-item">
+        <span className="ai ai-warn"><Icon name="upload" /></span>
+        <div className="attn-b"><b>Import backup</b><span className="muted">Replaces all current data. Saves a copy first.</span></div>
+        <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(event) => pickedFile(event.target.files?.[0])} aria-label="Backup file" />
+        <button className="btn btn-s" type="button" onClick={() => fileRef.current?.click()}>Import</button>
+      </li>
+    </ul>
+  );
+}
+
+export function Data() {
+  return (
+    <div className="grid">
+      <section className="card s12 narrow" aria-labelledby="data-t">
+        <div className="card-h"><div><h2 className="card-t" id="data-t">Import and export</h2><span className="muted">Backups stay on your computer. Keep them somewhere safe.</span></div></div>
+        <DataActions />
+      </section>
+    </div>
+  );
+}

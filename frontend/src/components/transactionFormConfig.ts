@@ -3,13 +3,14 @@ import { AccountTransactionType } from "../types";
 export const platformOptions = ["Wealthsimple", "EQ Bank", "CIBC", "Quest Trade", "Sun Life"];
 
 export const accountTransactionOptions: { label: string; value: AccountTransactionType }[] = [
-  { label: "Investment Buy", value: "investment_buy" },
-  { label: "Investment Sell", value: "investment_sell" },
+  { label: "Buy", value: "investment_buy" },
+  { label: "Sell", value: "investment_sell" },
   { label: "Transfer", value: "transfer" },
-  { label: "Dividend/Interest", value: "dividend_interest" },
-  { label: "Dividend Reinvestment", value: "dividend_reinvestment" },
-  { label: "Quantity Adjustment", value: "quantity_adjustment" },
-  { label: "Currency Exchange", value: "currency_exchange" },
+  { label: "Dividend", value: "dividend_interest" },
+  { label: "Reinvest", value: "dividend_reinvestment" },
+  { label: "Adjust units", value: "quantity_adjustment" },
+  { label: "Exchange", value: "currency_exchange" },
+  { label: "Withdrawal", value: "withdrawal" },
 ];
 
 export const categoryOptions: Record<string, string[]> = {

@@ -6,7 +6,8 @@ export type TransactionType =
   | "dividend_interest"
   | "dividend_reinvestment"
   | "quantity_adjustment"
-  | "currency_exchange";
+  | "currency_exchange"
+  | "withdrawal";
 
 export type AccountTransactionType = Exclude<TransactionType, "contribution">;
 
@@ -176,4 +177,56 @@ export interface ManualValuationPayload {
   precise_category?: string;
   market_value: number;
   snapshot_date: string;
+}
+
+export interface TimeSeriesPoint {
+  month: string;
+  contributions: number;
+  investments: number;
+  withdrawals?: number;
+  dividends?: number;
+}
+
+export interface CashRow {
+  account_name: string;
+  platform_name?: string | null;
+  currency: string;
+  amount: number;
+}
+
+export interface PortfolioHealth {
+  missing_price: number;
+  missing_quantity: number;
+  stale: number;
+  negative_cash: CashRow[];
+  idle_cash: CashRow[];
+  prices_updated_at?: string | null;
+}
+
+export interface HistoryPoint {
+  date: string;
+  book_value: number;
+  market_value: number;
+}
+
+export interface PortfolioTotals {
+  book_value: number;
+  market_value: number;
+  unrealized_pl: number;
+  unrealized_pl_pct?: number | null;
+  investable_cash: number;
+}
+
+export interface PortfolioOverview {
+  totals: PortfolioTotals;
+  summary: PortfolioSummary;
+  distribution: { sector: DistributionPoint[]; account: DistributionPoint[]; platform: DistributionPoint[] };
+  health: PortfolioHealth;
+}
+
+export interface PriceRefreshResult {
+  instrument_id: number;
+  symbol: string;
+  status: "ok" | "error" | string;
+  error?: string;
 }

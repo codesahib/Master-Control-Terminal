@@ -1,44 +1,35 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useId, useState } from "react";
 import { api } from "../api/client";
+import { errorMessage, money } from "../lib/format";
 import { Contribution } from "../types";
+import { Dialog } from "./Dialog";
+import { Field, MoneyInput, PlatformSelect, Section, Segmented } from "./form";
+import { Icon } from "./Icon";
+import { ACCOUNT_NAMES } from "./Shell";
 import { platformOptions } from "./transactionFormConfig";
 
 interface Props {
   onClose: () => void;
-  onSaved: () => Promise<void>;
+  onSaved: () => Promise<void> | void;
+  onDelete?: () => void;
   defaultAccount?: string;
   contribution?: Contribution;
   platforms?: string[];
 }
 
-function contributionForm(contribution: Contribution | undefined, defaultAccount: string, defaultPlatform: string) {
-  return {
+export function ContributionModal({ onClose, onSaved, onDelete, defaultAccount = "RRSP", contribution, platforms = platformOptions }: Props) {
+  const formId = useId();
+  const [form, setForm] = useState({
     transaction_date: contribution?.transaction_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
     account_name: contribution?.account_name || defaultAccount,
-    platform_name: contribution ? contribution.platform_name || "" : defaultPlatform,
-    amount: String(contribution?.amount ?? 0),
+    platform_name: contribution ? contribution.platform_name || "" : platforms[0] || "",
+    amount: contribution ? String(contribution.amount) : "",
     notes: contribution?.notes || "",
-  };
-}
-
-export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", contribution, platforms = platformOptions }: Props) {
-  const defaultPlatform = platforms[0] || "";
-  const [form, setForm] = useState(() => contributionForm(contribution, defaultAccount, defaultPlatform));
+  });
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const platformChoices = contribution?.platform_name && !platforms.includes(contribution.platform_name)
-    ? [contribution.platform_name, ...platforms]
-    : platforms;
-
-  useEffect(() => {
-    setForm(contributionForm(contribution, defaultAccount, defaultPlatform));
-  }, [contribution, defaultAccount]);
-
-  useEffect(() => {
-    if (!contribution && defaultPlatform) {
-      setForm((current) => current.platform_name ? current : { ...current, platform_name: defaultPlatform });
-    }
-  }, [contribution, defaultPlatform]);
+  const platformChoices = contribution?.platform_name && !platforms.includes(contribution.platform_name) ? [contribution.platform_name, ...platforms] : platforms;
+  const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -52,53 +43,53 @@ export function ContributionModal({ onClose, onSaved, defaultAccount = "RRSP", c
         amount: Number(form.amount),
         notes: form.notes || null,
       };
-
-      if (contribution) {
-        await api.put(`/contributions/${contribution.id}`, payload);
-      } else {
-        await api.post("/contributions", payload);
-      }
-
+      if (contribution) await api.put(`/contributions/${contribution.id}`, payload);
+      else await api.post("/contributions", payload);
       await onSaved();
       onClose();
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail;
-      setError(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail?.toString() || "Failed to save contribution");
+    } catch (exc) {
+      setError(errorMessage(exc, "Failed to save the contribution."));
     } finally {
       setIsSaving(false);
     }
   }
 
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="contribution-modal-title">
-      <div className="modal-content panel">
-        <div className="header">
-          <h3 id="contribution-modal-title">{contribution ? "Edit Contribution" : "New Contribution"}</h3>
-          <button className="btn-secondary btn" type="button" onClick={onClose}>Close</button>
-        </div>
-
-        <form onSubmit={submit}>
-          <div className="form-grid">
-            <div className="field"><label htmlFor="contribution-date">Date</label><input id="contribution-date" type="date" required value={form.transaction_date} onChange={(e) => setForm({ ...form, transaction_date: e.target.value })} /></div>
-            <div className="field"><label htmlFor="contribution-amount">Amount</label><input id="contribution-amount" type="number" min="0.01" step="0.01" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
-            <div className="field"><label htmlFor="contribution-account">Account</label><select id="contribution-account" required value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })}><option>RRSP</option><option>TFSA</option><option>FHSA</option></select></div>
-            <div className="field">
-              <label htmlFor="contribution-platform">Platform</label>
-              <select id="contribution-platform" value={form.platform_name} onChange={(e) => setForm({ ...form, platform_name: e.target.value })}>
-                <option value="">No platform</option>
-                {platformChoices.map((platform) => (
-                  <option key={platform} value={platform}>{platform}</option>
-                ))}
-              </select>
-            </div>
-            <div className="field field-span"><label htmlFor="contribution-notes">Notes</label><textarea id="contribution-notes" value={form.notes} rows={3} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
+    <Dialog
+      title={contribution ? "Edit contribution" : "New contribution"}
+      subtitle="Money you put into a registered account. It uses contribution room."
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          {contribution && onDelete && (
+            <button className="btn btn-danger-g" type="button" onClick={onDelete}><Icon name="trash" size={16} />Delete</button>
+          )}
+          <span className="grow" />
+          <button className="btn btn-s" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save contribution"}</button>
+        </>
+      }
+    >
+      <form id={formId} className="form" onSubmit={submit}>
+        <Section n={1} title="Where">
+          <Segmented label="Account" value={form.account_name} options={ACCOUNT_NAMES} onChange={(account_name) => set({ account_name })} span={6} />
+          <Field label="Platform" htmlFor="contribution-platform"><PlatformSelect id="contribution-platform" value={form.platform_name} platforms={platformChoices} placeholder="No platform" onChange={(platform_name) => set({ platform_name })} /></Field>
+          <Field label="Date" htmlFor="contribution-date"><input id="contribution-date" className="inp" type="date" required value={form.transaction_date} onChange={(event) => set({ transaction_date: event.target.value })} /></Field>
+        </Section>
+        <Section n={2} title="How much">
+          <Field label="Amount" htmlFor="contribution-amount" span={6} hint={Number(form.amount) > 0 ? `${money(Number(form.amount))} toward ${form.account_name} room` : undefined}>
+            <MoneyInput id="contribution-amount" required min="0.01" value={form.amount} onChange={(amount) => set({ amount })} currency="CAD" />
+          </Field>
+        </Section>
+        <Section n={3} title="Note" optional>
+          <div className="f c6">
+            <label className="sr-only" htmlFor="contribution-notes">Note</label>
+            <textarea id="contribution-notes" className="inp" rows={2} value={form.notes} onChange={(event) => set({ notes: event.target.value })} />
           </div>
-          {error && <small className="field-error">{error}</small>}
-          <div className="form-actions">
-            <button className="btn" type="submit" disabled={isSaving}>{isSaving ? "Saving" : "Save Contribution"}</button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </Section>
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </form>
+    </Dialog>
   );
 }

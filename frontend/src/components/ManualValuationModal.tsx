@@ -1,15 +1,20 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useId, useState } from "react";
 import { api } from "../api/client";
+import { errorMessage, money } from "../lib/format";
 import { PortfolioPLRow } from "../types";
+import { Dialog } from "./Dialog";
+import { Field, MoneyInput, Section } from "./form";
 
 interface Props {
   row: PortfolioPLRow;
   onClose: () => void;
-  onSaved: () => Promise<void>;
+  onSaved: () => Promise<void> | void;
 }
 
 export function ManualValuationModal({ row, onClose, onSaved }: Props) {
+  const formId = useId();
   const child = row.children?.[0];
+  const accountName = child?.account_name || row.account_name;
   const platformName = row.platform_name || child?.platform_name;
   const [marketValue, setMarketValue] = useState(String(row.market_value ?? row.book_value));
   const [snapshotDate, setSnapshotDate] = useState(row.manual_valuation_date || new Date().toISOString().slice(0, 10));
@@ -22,7 +27,7 @@ export function ManualValuationModal({ row, onClose, onSaved }: Props) {
     setIsSaving(true);
     try {
       await api.post("/manual-valuations", {
-        account_name: child?.account_name || row.account_name,
+        account_name: accountName,
         platform_name: platformName || null,
         instrument_id: row.instrument_id || null,
         symbol: row.symbol,
@@ -34,34 +39,35 @@ export function ManualValuationModal({ row, onClose, onSaved }: Props) {
       });
       await onSaved();
       onClose();
-    } catch (e: any) {
-      setError(e?.response?.data?.detail?.toString() || "Manual valuation failed to save.");
+    } catch (exc) {
+      setError(errorMessage(exc, "Manual value failed to save."));
     } finally {
       setIsSaving(false);
     }
   }
 
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="manual-valuation-title">
-      <div className="modal-content panel">
-        <div className="header">
-          <h3 id="manual-valuation-title">Update Manual Value</h3>
-          <button className="btn-secondary btn" type="button" onClick={onClose}>Close</button>
-        </div>
-        <form onSubmit={submit}>
-          <div className="form-grid">
-            <div className="field"><label>Symbol</label><input value={row.symbol} disabled /></div>
-            <div className="field"><label>Account</label><input value={child?.account_name || row.account_name} disabled /></div>
-            <div className="field"><label>Platform</label><input value={platformName || ""} disabled /></div>
-            <div className="field"><label htmlFor="manual-market-value">Market Value</label><input id="manual-market-value" type="number" min="0" step="0.01" inputMode="decimal" required value={marketValue} onChange={(e) => setMarketValue(e.target.value)} /></div>
-            <div className="field"><label htmlFor="manual-snapshot-date">Updated Date</label><input id="manual-snapshot-date" type="date" required value={snapshotDate} onChange={(e) => setSnapshotDate(e.target.value)} /></div>
-          </div>
-          {error && <small className="field-error">{error}</small>}
-          <div className="form-actions">
-            <button className="btn" type="submit" disabled={isSaving}>{isSaving ? "Saving" : "Save Manual Value"}</button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <Dialog
+      title="Update value"
+      subtitle={`${row.name || row.symbol} · ${accountName}${platformName ? ` · ${platformName}` : ""}`}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <span className="grow" />
+          <button className="btn btn-s" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-p" type="submit" form={formId} disabled={isSaving}>{isSaving ? "Saving…" : "Save value"}</button>
+        </>
+      }
+    >
+      <form id={formId} className="form" onSubmit={submit}>
+        <p className="sub">For GICs and funds without a live price. Book value is {money(row.book_value, row.currency)}.</p>
+        <Section n={1} title="Value">
+          <Field label="Market value" htmlFor="manual-value"><MoneyInput id="manual-value" required min="0" value={marketValue} onChange={setMarketValue} currency={row.currency} /></Field>
+          <Field label="As of" htmlFor="manual-date"><input id="manual-date" className="inp" type="date" required value={snapshotDate} onChange={(event) => setSnapshotDate(event.target.value)} /></Field>
+        </Section>
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </form>
+    </Dialog>
   );
 }
