@@ -128,16 +128,30 @@ def test_investment_buy_can_use_multiple_or_no_funding_contributions():
             }
         ]
 
-        with pytest.raises(ValueError, match="must total the transaction amount plus fees"):
+        # Partial funding: the other $5 came from cash outside the pools.
+        create_account_transaction(
+            db,
+            AccountTransactionCreate(
+                transaction_type=TransactionType.investment_buy,
+                transaction_date=date(2026, 1, 5),
+                account_name="TFSA",
+                platform_name="Wealthsimple",
+                amount=10,
+                funding_contributions=[{"contribution_id": second.id, "amount": 5}],
+            ),
+        )
+        assert list_available_contributions(db, "TFSA")[0]["remaining_amount"] == 45.0
+
+        with pytest.raises(ValueError, match="cannot exceed the transaction amount plus fees"):
             create_account_transaction(
                 db,
                 AccountTransactionCreate(
                     transaction_type=TransactionType.investment_buy,
-                    transaction_date=date(2026, 1, 5),
+                    transaction_date=date(2026, 1, 6),
                     account_name="TFSA",
                     platform_name="Wealthsimple",
-                    amount=10,
-                    funding_contributions=[{"contribution_id": second.id, "amount": 5}],
+                    amount=2,
+                    funding_contributions=[{"contribution_id": second.id, "amount": 3}],
                 ),
             )
 

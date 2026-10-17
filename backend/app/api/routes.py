@@ -22,6 +22,7 @@ from app.schemas.schemas import (
     ContributionRead,
     ContributionRoomRead,
     DistributionPoint,
+    GicMaturityCreate,
     HoldingRead,
     MarketPriceRefreshResult,
     ManualValuationUpsert,
@@ -41,6 +42,7 @@ from app.services.finance import (
     get_contribution_room,
     list_available_contributions,
     list_contribution_limits,
+    mature_gic,
     restore_all_data,
     tracked_years,
     upsert_manual_valuation,
@@ -203,6 +205,11 @@ def list_available_contributions_endpoint(
 def create_account_transaction_endpoint(payload: AccountTransactionCreate, db: Session = Depends(get_db)):
     txn = _run(db, create_account_transaction, payload)
     return transaction_read(db, txn)
+
+
+@router.post("/gic-maturities", response_model=list[AccountTransactionRead])
+def mature_gic_endpoint(payload: GicMaturityCreate, db: Session = Depends(get_db)):
+    return [transaction_read(db, txn) for txn in _run(db, mature_gic, payload)]
 
 
 @router.put("/account-transactions/{transaction_id}", response_model=AccountTransactionRead)

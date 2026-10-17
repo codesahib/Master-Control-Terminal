@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.time import utcnow
+from app.core.time import market_date, utcnow
 from app.db.session import Base, get_db
 from app.main import app
 from app.models.models import (
@@ -213,7 +213,7 @@ def test_overview_totals_and_snapshot_history():
 
         client = _client(db)
         history = client.get("/portfolio/history", headers={"X-Requested-With": "master-terminal"}).json()
-        assert history == [{"date": str(utcnow().date()), "book_value": 1180, "market_value": 1360, "currency": "CAD"}]
+        assert history == [{"date": str(market_date()), "book_value": 1180, "market_value": 1360, "currency": "CAD"}]
 
 
 def test_sort_pl_rows_by_market_value_puts_unpriced_rows_last():

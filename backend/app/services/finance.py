@@ -21,7 +21,8 @@ from app.models.models import (
     TransactionFunding,
     TransactionType,
 )
-from app.schemas.schemas import AccountTransactionCreate, ContributionCreate
+from app.schemas.schemas import AccountTransactionCreate, ContributionCreate, FundingContribution, GicMaturityCreate
+from app.services.market_data import GIC_ASSET_TYPE
 
 FIRST_TRACKED_YEAR = 2021
 FHSA_ANNUAL_LIMIT = 8000.0
@@ -399,6 +400,7 @@ def _save_transaction(
     payload: ContributionCreate | AccountTransactionCreate,
     txn: Transaction | None = None,
     transaction_type: TransactionType | None = None,
+    commit: bool = True,
 ) -> Transaction:
     before = _transaction_payload(db, txn) if txn else None
     old_position = _position_key(txn) if txn else None
@@ -452,8 +454,9 @@ def _save_transaction(
         after=_transaction_payload(db, txn),
         source="transactions",
     )
-    db.commit()
-    db.refresh(txn)
+    if commit:
+        db.commit()
+        db.refresh(txn)
     return txn
 
 
@@ -472,6 +475,73 @@ def update_contribution(db: Session, transaction_id: int, payload: ContributionC
 def create_account_transaction(db: Session, payload: AccountTransactionCreate) -> Transaction:
     _validate_contribution_funding(db, payload)
     return _save_transaction(db, payload)
+
+
+def mature_gic(db: Session, payload: GicMaturityCreate) -> list[Transaction]:
+    """Record GIC interest, then reinvest it or move the whole GIC to cash, as one database transaction."""
+    instrument = db.get(Instrument, payload.instrument_id)
+    if not instrument or instrument.asset_type != GIC_ASSET_TYPE:
+        raise ValueError("selected holding is not a GIC")
+    account = get_account(db, payload.account_name)
+    platform = normalize_platform(db, payload.platform_name)
+    # Same book math as portfolio.list_holdings for a holding without quantity: buys add, sells subtract.
+    principal = Decimal("0")
+    for txn_type, amount, fees in db.execute(
+        select(Transaction.transaction_type, Transaction.amount, Transaction.fees).where(
+            Transaction.transaction_type.in_([TransactionType.investment_buy, TransactionType.investment_sell]),
+            Transaction.instrument_id == instrument.id,
+            Transaction.account_id == account.id,
+            Transaction.platform_id == (platform.id if platform else None),
+        )
+    ):
+        if txn_type == TransactionType.investment_buy:
+            principal += Decimal(str(amount)) + Decimal(str(fees or 0))
+        else:
+            principal -= Decimal(str(amount))
+    principal = _cents(principal)
+    if principal <= 0:
+        raise ValueError(f"no {instrument.symbol} holding in {account.name} at {payload.platform_name}")
+    common = dict(
+        transaction_date=payload.transaction_date,
+        account_name=payload.account_name,
+        platform_name=payload.platform_name,
+        instrument_id=instrument.id,
+        broad_category="Bond",
+        precise_category="GIC",
+        amount=payload.interest,
+        currency=payload.currency,
+    )
+    interest = _save_transaction(
+        db,
+        AccountTransactionCreate(transaction_type=TransactionType.dividend_interest, notes="GIC interest at maturity", **common),
+        commit=False,
+    )
+    if not payload.reinvest:
+        sell = _save_transaction(
+            db,
+            AccountTransactionCreate(
+                transaction_type=TransactionType.investment_sell,
+                notes="GIC matured: principal moved to cash",
+                **{**common, "amount": float(principal)},
+            ),
+            commit=False,
+        )
+        db.commit()
+        db.refresh(interest)
+        db.refresh(sell)
+        return [interest, sell]
+    buy_payload = AccountTransactionCreate(
+        transaction_type=TransactionType.investment_buy,
+        notes="GIC renewal: interest reinvested into principal",
+        funding_contributions=[FundingContribution(contribution_id=interest.id, amount=payload.interest)],
+        **common,
+    )
+    _validate_contribution_funding(db, buy_payload)
+    buy = _save_transaction(db, buy_payload, commit=False)
+    db.commit()
+    db.refresh(interest)
+    db.refresh(buy)
+    return [interest, buy]
 
 
 def update_account_transaction(db: Session, transaction_id: int, payload: AccountTransactionCreate) -> Transaction | None:
@@ -612,8 +682,9 @@ def _validate_contribution_funding(
         return
     funding_total = _cents(sum(Decimal(str(funding.amount if hasattr(funding, "amount") else funding["amount"])) for funding in fundings))
     cash_amount = payload.source_amount if payload.source_amount is not None else payload.amount
-    if funding_total != _cents(Decimal(str(cash_amount)) + Decimal(str(payload.fees or 0))):
-        raise ValueError("funding contributions must total the transaction amount plus fees")
+    # Partial funding is fine: the rest came from cash outside the pools, such as a matured GIC or sale proceeds.
+    if funding_total > _cents(Decimal(str(cash_amount)) + Decimal(str(payload.fees or 0))):
+        raise ValueError("funding sources cannot exceed the transaction amount plus fees")
 
     available = {source["id"]: _cents(source["remaining_amount"]) for source in _available_funding_transactions(db, payload.account_name, transaction)}
     for funding in fundings:

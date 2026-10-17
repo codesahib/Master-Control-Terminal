@@ -121,6 +121,17 @@ class AccountTransactionCreate(BaseModel):
         return self
 
 
+class GicMaturityCreate(BaseModel):
+    transaction_date: date
+    account_name: AccountName
+    platform_name: PlatformName
+    instrument_id: int = Field(gt=0)
+    interest: float = Field(gt=0)
+    currency: str = Field(default="CAD", pattern="^[A-Z]{3}$")
+    # True: interest joins the principal. False: principal and interest move to cash on the platform.
+    reinvest: bool = True
+
+
 class TransactionRead(BaseModel):
     id: int
     transaction_type: TransactionType
@@ -270,6 +281,7 @@ class PortfolioPLRow(BaseModel):
     symbol: str
     provider_symbol: Optional[str] = None
     name: Optional[str] = None
+    asset_type: Optional[str] = None
     broad_category: Optional[str]
     precise_category: Optional[str]
     record_type: str

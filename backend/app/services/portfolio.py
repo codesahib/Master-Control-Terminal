@@ -15,7 +15,7 @@ from app.models.models import (
     Transaction,
     TransactionType,
 )
-from app.services.market_data import latest_fx_rate, latest_prices
+from app.services.market_data import GIC_ASSET_TYPE, latest_fx_rate, latest_prices
 
 PRICED_STATUSES = {"ok", "stale"}
 QUANTITY_EPSILON = 1e-8
@@ -313,6 +313,7 @@ def list_holdings(db: Session, account=None, year=None):
                 "symbol": instrument.symbol if instrument else "Unspecified",
                 "provider_symbol": instrument.provider_symbol if instrument else None,
                 "name": instrument.name if instrument else None,
+                "asset_type": instrument.asset_type if instrument else None,
                 "category_id": None,
                 "broad_category": None,
                 "precise_category": None,
@@ -387,6 +388,7 @@ def list_holdings(db: Session, account=None, year=None):
                     "symbol": row["symbol"],
                     "provider_symbol": row["provider_symbol"],
                     "name": row["name"],
+                    "asset_type": row["asset_type"],
                     "broad_category": row["broad_category"],
                     "precise_category": row["precise_category"],
                     "record_type": "holding",
@@ -479,6 +481,12 @@ def _portfolio_pl_rows(db: Session, account=None, year=None, currency: str = "CA
             row["unrealized_pl"] = 0.0
             row["unrealized_pl_pct"] = 0.0
             row["price_status"] = "cash"
+        elif row["quantity"] is None and row.get("asset_type") == GIC_ASSET_TYPE:
+            # A GIC is worth its principal: book value grows with each renewal, interest shows as income.
+            row["market_value"] = round(float(row["book_value"]), 2)
+            row["unrealized_pl"] = 0.0
+            row["unrealized_pl_pct"] = 0.0
+            row["price_status"] = "ok"
         elif row["quantity"] is None:
             manual_value = _manual_value_for_holding(manual_values, row)
             if manual_value:

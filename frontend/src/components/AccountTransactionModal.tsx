@@ -148,6 +148,10 @@ export function AccountTransactionModal({
       setError("Funding source amounts must be greater than zero.");
       return;
     }
+    if (requiresFunding && fundingTotal - cashNeeded > 0.005) {
+      setError("Paid from is more than the amount needed.");
+      return;
+    }
     if (isTransfer && !form.source_platform_name) {
       setError("Source platform is required for transfers.");
       return;
@@ -219,9 +223,15 @@ export function AccountTransactionModal({
         )}
       </dl>
       {requiresFunding && fundingCashSources.length > 0 && (
-        <div className={`sum-check ${Math.abs(fundingTotal - cashNeeded) < 0.005 ? "ok" : "warn"}`}>
-          <Icon name={Math.abs(fundingTotal - cashNeeded) < 0.005 ? "check" : "warn"} size={16} />
-          <span className="money">Funding {money(fundingTotal)} of {money(cashNeeded)} needed</span>
+        <div className={`sum-check ${fundingTotal - cashNeeded > 0.005 ? "warn" : "ok"}`}>
+          <Icon name={fundingTotal - cashNeeded > 0.005 ? "warn" : "check"} size={16} />
+          <span className="money">
+            {fundingTotal - cashNeeded > 0.005
+              ? `Paid from ${money(fundingTotal)} is more than ${money(cashNeeded)} needed`
+              : cashNeeded - fundingTotal > 0.005
+                ? `Paid from ${money(fundingTotal)}, other cash ${money(cashNeeded - fundingTotal)}`
+                : `Funding ${money(fundingTotal)} of ${money(cashNeeded)} needed`}
+          </span>
         </div>
       )}
       {requiresSymbol && !form.symbol && <div className="sum-check warn"><Icon name="warn" size={16} />Pick a symbol</div>}

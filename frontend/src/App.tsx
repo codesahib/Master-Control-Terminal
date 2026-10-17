@@ -1,6 +1,7 @@
 import { AccountTransactionModal } from "./components/AccountTransactionModal";
 import { ContributionModal } from "./components/ContributionModal";
 import { ConfirmDialog, Dialog } from "./components/Dialog";
+import { GicMaturityModal } from "./components/GicMaturityModal";
 import { ManualValuationModal } from "./components/ManualValuationModal";
 import { ACCOUNT_NAMES, NewItem, Shell } from "./components/Shell";
 import { AppProvider, useApp } from "./context";
@@ -50,6 +51,8 @@ function ModalHost() {
       );
     case "valuation":
       return <ManualValuationModal row={modal.row} onClose={closeModal} onSaved={refresh} />;
+    case "gic":
+      return <GicMaturityModal row={modal.row} onClose={closeModal} onSaved={refresh} />;
     case "new":
       return (
         <Dialog title="Add" size="sm" onClose={closeModal}>
