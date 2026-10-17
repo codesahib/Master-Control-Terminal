@@ -10,6 +10,7 @@ export type ModalState =
   | { kind: "contribution"; contribution?: Contribution; account?: string }
   | { kind: "transaction"; transaction?: AccountTransaction; account?: string; type?: AccountTransactionType }
   | { kind: "valuation"; row: PortfolioPLRow }
+  | { kind: "gic"; row: PortfolioPLRow }
   | { kind: "new"; account?: string }
   | null;
 

@@ -11,6 +11,8 @@ PROVIDER = "yfinance"
 FX_SYMBOL = "USDCAD"
 FX_PROVIDER_SYMBOL = "CAD=X"
 FX_ASSET_TYPE = "fx"
+# Fixed-principal instrument: never priced, valued at book value (see portfolio._portfolio_pl_rows).
+GIC_ASSET_TYPE = "gic"
 PRICE_TIMEOUT_SECONDS = 10
 
 
@@ -62,7 +64,7 @@ def upsert_instrument(
     )
     if not instrument:
         instrument = db.scalar(select(Instrument).where(func.lower(Instrument.symbol) == normalized_symbol.lower()))
-        if instrument and instrument.asset_type == "manual":
+        if instrument and instrument.asset_type in {"manual", GIC_ASSET_TYPE}:
             raise ValueError(f"{instrument.symbol} is already used by a manual instrument")
         if instrument and _is_other_listing(db, instrument, normalized_provider_symbol, currency):
             # e.g. you hold SHOP.TO and pick NYSE SHOP: never repoint the TSX instrument; use a twin like "SHOP (NYSE)".
