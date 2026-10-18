@@ -78,6 +78,8 @@ export function AccountTransactionModal({
   });
 
   const requiresSymbol = ["investment_buy", "investment_sell", "dividend_reinvestment", "quantity_adjustment"].includes(transactionType);
+  // Dividends can name the paying symbol; bank interest leaves it empty.
+  const showSymbol = requiresSymbol || transactionType === "dividend_interest";
   const requiresFunding = ["investment_buy", "transfer"].includes(transactionType);
   const isCurrencyExchange = transactionType === "currency_exchange";
   const isWithdrawal = transactionType === "withdrawal";
@@ -167,9 +169,9 @@ export function AccountTransactionModal({
         source_platform_name: isTransfer ? form.source_platform_name : null,
         broad_category: showCategories ? form.broad_category || null : null,
         precise_category: showCategories ? form.precise_category || null : null,
-        instrument_id: requiresSymbol ? form.instrument_id || null : null,
-        symbol: requiresSymbol ? form.symbol || null : null,
-        instrument_name: requiresSymbol ? form.instrument_name || null : null,
+        instrument_id: showSymbol ? form.instrument_id || null : null,
+        symbol: showSymbol ? form.symbol || null : null,
+        instrument_name: showSymbol ? form.instrument_name || null : null,
         amount: isAdjustment ? 0 : Number(form.amount),
         currency: form.currency,
         source_amount: (isCurrencyExchange || supportsSourceCash) && form.source_amount ? Number(form.source_amount) : null,
@@ -178,7 +180,7 @@ export function AccountTransactionModal({
         fees: isAdjustment || isWithdrawal ? 0 : Number(form.fees || 0),
         fee_currency: form.fee_currency || form.currency,
         notes: form.notes || null,
-        is_custom_symbol: requiresSymbol ? form.is_custom_symbol : false,
+        is_custom_symbol: showSymbol ? form.is_custom_symbol : false,
         funding_cash_sources: requiresFunding ? fundingCashSources : [],
       };
       if (transaction) await api.put(`/account-transactions/${transaction.id}`, payload);
@@ -203,7 +205,7 @@ export function AccountTransactionModal({
         <div className="sum-head">
           {TYPE_LABELS[transactionType]}
           {requiresSymbol && qty ? <span className="money"> {qty}</span> : ""}
-          {requiresSymbol && form.symbol ? ` ${form.symbol}` : ""}
+          {showSymbol && form.symbol ? ` ${form.symbol}` : ""}
         </div>
         <div className="sub">{form.account_name} · {isTransfer ? `${form.source_platform_name || "?"} to ${form.platform_name || "?"}` : form.platform_name || "No platform"}</div>
       </div>
@@ -280,10 +282,10 @@ export function AccountTransactionModal({
           )}
         </Section>
 
-        {(requiresSymbol || showCategories) && (
+        {(showSymbol || showCategories) && (
           <Section n={step++} title="What">
-            {requiresSymbol && (
-              <Field label="Symbol" htmlFor="tx-symbol" span={6}>
+            {showSymbol && (
+              <Field label={requiresSymbol ? "Symbol" : "Symbol (optional)"} htmlFor="tx-symbol" span={6}>
                 <SymbolPicker
                   query={symbolQuery}
                   onQueryChange={(value) => { setSymbolQuery(value); set({ instrument_id: undefined, symbol: value }); }}
@@ -295,7 +297,7 @@ export function AccountTransactionModal({
                 />
               </Field>
             )}
-            {requiresSymbol && form.is_custom_symbol && (
+            {showSymbol && form.is_custom_symbol && (
               <Field label="Instrument name" htmlFor="tx-name" span={6}><input id="tx-name" className="inp" placeholder="For example: EQ Bank 1-year GIC" value={form.instrument_name} onChange={(event) => set({ instrument_name: event.target.value })} /></Field>
             )}
             {showCategories && (
